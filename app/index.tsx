@@ -7,6 +7,7 @@ import "@gluestack-ui/core/toast/creator"
 
 const Index = () => {
   const router = useRouter();
+
   const onLogin = () => {
     router.push('/login')
   }

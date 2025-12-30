@@ -14,7 +14,7 @@ const Signup = () => {
   const [confirmPassword, setConfirmPassword] = useState('');
 
   const onLogin = () => {
-    router.push('/login');
+    router.replace('/login');
   };
 
   const togglePasswordVisibility = () => {
