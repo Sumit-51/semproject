@@ -1,42 +1,39 @@
-// app/login.tsx
+// app/forgot-password.tsx
 import '@/global.css';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
-import { signInWithEmailAndPassword } from 'firebase/auth';
+import { sendPasswordResetEmail } from 'firebase/auth';
 import React, { useMemo, useState } from 'react';
 import {
-  ActivityIndicator,
-  Keyboard,
-  KeyboardAvoidingView,
-  Platform,
-  SafeAreaView,
-  ScrollView,
-  StatusBar,
-  StyleSheet,
-  Text,
-  TextInput,
-  TouchableOpacity,
-  TouchableWithoutFeedback,
-  useWindowDimensions,
-  View,
+    ActivityIndicator,
+    Keyboard,
+    KeyboardAvoidingView,
+    Platform,
+    SafeAreaView,
+    ScrollView,
+    StatusBar,
+    StyleSheet,
+    Text,
+    TextInput,
+    TouchableOpacity,
+    TouchableWithoutFeedback,
+    useWindowDimensions,
+    View,
 } from 'react-native';
 import { auth } from './lib/firebase';
 
 const errorMessage = (code?: string): string => {
   const messages: { [key: string]: string } = {
     'auth/invalid-email': 'Email is invalid.',
-    'auth/user-disabled': 'This account has been disabled.',
     'auth/user-not-found': 'No account found with this email.',
-    'auth/wrong-password': 'Incorrect password.',
-    'auth/invalid-credential': 'Invalid credentials. Please try again.',
     'auth/too-many-requests': 'Too many attempts. Try again later.',
   };
-  return messages[code || ''] || 'Unable to login. Please try again.';
+  return messages[code || ''] || 'Unable to send reset email. Please try again.';
 };
 
 const isEmailValid = (val: string): boolean => /\S+@\S+\.\S+/.test(val);
 
-const Login: React.FC = () => {
+const ForgotPassword: React.FC = () => {
   const router = useRouter();
   const { width, height } = useWindowDimensions();
 
@@ -57,31 +54,41 @@ const Login: React.FC = () => {
     [width, height, isSmallDevice, isTablet]
   );
 
-  const [showPassword, setShowPassword] = useState<boolean>(false);
   const [email, setEmail] = useState<string>('');
-  const [password, setPassword] = useState<string>('');
   const [loading, setLoading] = useState<boolean>(false);
   const [errorText, setErrorText] = useState<string>('');
+  const [successMessage, setSuccessMessage] = useState<string>('');
 
-  const onSignup = (): void => router.push('/signup');
-  const onForgotPassword = (): void => router.push('/forgot-password');
-  const togglePasswordVisibility = (): void => setShowPassword(!showPassword);
+  const onBackToLogin = (): void => router.back();
 
-  const handleLogin = async (): Promise<void> => {
+  const handleResetPassword = async (): Promise<void> => {
     const trimmedEmail = email.trim();
-    if (!trimmedEmail || !password) {
-      setErrorText('Please enter email and password.');
+    
+    if (!trimmedEmail) {
+      setErrorText('Please enter your email address.');
       return;
     }
+    
     if (!isEmailValid(trimmedEmail)) {
       setErrorText('Please enter a valid email address.');
       return;
     }
+
     try {
       setLoading(true);
       setErrorText('');
-      await signInWithEmailAndPassword(auth, trimmedEmail, password);
-      router.replace('/');
+      setSuccessMessage('');
+      
+      await sendPasswordResetEmail(auth, trimmedEmail);
+      
+      setSuccessMessage('Password reset email sent! Check your inbox.');
+      setEmail('');
+      
+      // Navigate back to login after 3 seconds
+      setTimeout(() => {
+        router.back();
+      }, 3000);
+      
     } catch (err: any) {
       setErrorText(errorMessage(err?.code));
     } finally {
@@ -140,12 +147,27 @@ const Login: React.FC = () => {
               ]}
             />
 
+            {/* Back Button */}
+            <TouchableOpacity
+              style={[
+                styles.backButton,
+                {
+                  top: Platform.OS === 'ios' ? height * 0.06 : height * 0.02,
+                  left: width * 0.05,
+                },
+              ]}
+              onPress={onBackToLogin}
+              activeOpacity={0.7}
+            >
+              <Ionicons name="arrow-back" size={24} color="#e9eef7" />
+            </TouchableOpacity>
+
             <ScrollView
               contentContainerStyle={[
                 styles.scrollContent,
                 {
                   paddingHorizontal: responsiveStyles.horizontalPadding,
-                  paddingTop: isSmallDevice ? height * 0.04 : height * 0.08,
+                  paddingTop: isSmallDevice ? height * 0.1 : height * 0.12,
                   paddingBottom: height * 0.05,
                 },
               ]}
@@ -166,7 +188,7 @@ const Login: React.FC = () => {
                   ]}
                 >
                   <Ionicons
-                    name="barbell-outline"
+                    name="lock-closed"
                     size={isSmallDevice ? 32 : isTablet ? 48 : 40}
                     color="#0a0f1a"
                   />
@@ -181,7 +203,7 @@ const Login: React.FC = () => {
                     },
                   ]}
                 >
-                  FITCORE
+                  Reset Password
                 </Text>
 
                 <Text
@@ -193,11 +215,11 @@ const Login: React.FC = () => {
                     },
                   ]}
                 >
-                  Train Harder. Get Stronger.
+                  Enter your email to receive reset link
                 </Text>
               </View>
 
-              {/* Login Card */}
+              {/* Reset Card */}
               <View
                 style={[
                   styles.card,
@@ -208,30 +230,17 @@ const Login: React.FC = () => {
                   },
                 ]}
               >
-                {/* Card Header */}
-                <View style={styles.cardHeader}>
-                  <Text
-                    style={[
-                      styles.cardTitle,
-                      {
-                        fontSize: responsiveStyles.cardTitleSize,
-                      },
-                    ]}
-                  >
-                    Welcome Back
-                  </Text>
-                  <View style={styles.badge}>
-                    <Ionicons name="flash" size={11} color="#0a0f1a" />
-                    <Text
-                      style={[
-                        styles.badgeText,
-                        { fontSize: isTablet ? 10 : 9 },
-                      ]}
-                    >
-                      PRO
-                    </Text>
-                  </View>
-                </View>
+                <Text
+                  style={[
+                    styles.cardTitle,
+                    {
+                      fontSize: responsiveStyles.cardTitleSize,
+                      marginBottom: height * 0.01,
+                    },
+                  ]}
+                >
+                  Forgot Password?
+                </Text>
 
                 <Text
                   style={[
@@ -242,7 +251,7 @@ const Login: React.FC = () => {
                     },
                   ]}
                 >
-                  Sign in to continue your fitness journey
+                  No worries! Enter your email and we'll send you a link to reset your password.
                 </Text>
 
                 {/* Email Input */}
@@ -251,7 +260,7 @@ const Login: React.FC = () => {
                     styles.inputWrapper,
                     {
                       height: responsiveStyles.inputHeight,
-                      marginBottom: height * 0.015,
+                      marginBottom: height * 0.02,
                     },
                   ]}
                 >
@@ -268,70 +277,17 @@ const Login: React.FC = () => {
                     value={email}
                     onChangeText={setEmail}
                     editable={!loading}
-                    returnKeyType="next"
-                  />
-                </View>
-
-                {/* Password Input */}
-                <View
-                  style={[
-                    styles.inputWrapper,
-                    {
-                      height: responsiveStyles.inputHeight,
-                      marginBottom: height * 0.01,
-                    },
-                  ]}
-                >
-                  <View style={styles.inputIconBox}>
-                    <Ionicons
-                      name="lock-closed-outline"
-                      size={20}
-                      color="#64748b"
-                    />
-                  </View>
-                  <TextInput
-                    placeholder="Password"
-                    placeholderTextColor="#64748b"
-                    secureTextEntry={!showPassword}
-                    style={[styles.input, styles.passwordInput]}
-                    autoCapitalize="none"
-                    autoComplete="password"
-                    value={password}
-                    onChangeText={setPassword}
-                    editable={!loading}
                     returnKeyType="done"
-                    onSubmitEditing={handleLogin}
+                    onSubmitEditing={handleResetPassword}
                   />
-                  <TouchableOpacity
-                    onPress={togglePasswordVisibility}
-                    style={styles.eyeButton}
-                    hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                  >
-                    <Ionicons
-                      name={showPassword ? 'eye-off-outline' : 'eye-outline'}
-                      size={20}
-                      color="#64748b"
-                    />
-                  </TouchableOpacity>
                 </View>
-
-                {/* Forgot Password Link */}
-                <TouchableOpacity
-                  activeOpacity={0.7}
-                  onPress={onForgotPassword}
-                  style={styles.forgotPasswordButton}
-                >
-                  <Text style={[styles.forgotPasswordText, { fontSize: isTablet ? 14 : 12 }]}>
-                    Forgot Password?
-                  </Text>
-                </TouchableOpacity>
 
                 {/* Error Message */}
                 {errorText ? (
                   <View
                     style={[
                       styles.errorBox,
-                      { marginBottom: height * 0.015, marginTop: height * 0.01 },
+                      { marginBottom: height * 0.015 },
                     ]}
                   >
                     <Ionicons name="alert-circle" size={16} color="#f87171" />
@@ -341,87 +297,65 @@ const Login: React.FC = () => {
                   </View>
                 ) : null}
 
-                {/* Login Button */}
+                {/* Success Message */}
+                {successMessage ? (
+                  <View
+                    style={[
+                      styles.successBox,
+                      { marginBottom: height * 0.015 },
+                    ]}
+                  >
+                    <Ionicons name="checkmark-circle" size={16} color="#4ade80" />
+                    <Text style={[styles.successText, { fontSize: isTablet ? 14 : 12 }]}>
+                      {successMessage}
+                    </Text>
+                  </View>
+                ) : null}
+
+                {/* Reset Button */}
                 <TouchableOpacity
                   style={[
                     styles.primaryButton,
                     {
                       height: responsiveStyles.buttonHeight,
                       marginBottom: height * 0.02,
-                      marginTop: height * 0.015,
                     },
                     loading && styles.buttonDisabled,
                   ]}
                   activeOpacity={0.75}
-                  onPress={handleLogin}
+                  onPress={handleResetPassword}
                   disabled={loading}
                 >
                   {loading ? (
                     <ActivityIndicator color="#0a0f1a" size="small" />
                   ) : (
                     <>
+                      <Ionicons
+                        name="mail"
+                        size={isSmallDevice ? 16 : isTablet ? 20 : 18}
+                        color="#0a0f1a"
+                      />
                       <Text
                         style={[
                           styles.primaryButtonText,
                           { fontSize: isSmallDevice ? 15 : isTablet ? 17 : 16 },
                         ]}
                       >
-                        Login
+                        Send Reset Link
                       </Text>
-                      <Ionicons
-                        name="arrow-forward"
-                        size={isSmallDevice ? 16 : isTablet ? 20 : 18}
-                        color="#0a0f1a"
-                      />
                     </>
                   )}
                 </TouchableOpacity>
 
-                {/* Divider */}
-                <View style={[styles.dividerRow, { marginVertical: height * 0.02 }]}>
-                  <View style={styles.dividerLine} />
-                  <Text style={[styles.dividerText, { fontSize: isTablet ? 13 : 12 }]}>
-                    or
-                  </Text>
-                  <View style={styles.dividerLine} />
-                </View>
-
-                {/* Social Buttons */}
-                <View style={[styles.socialRow, { marginBottom: height * 0.025 }]}>
-                  <TouchableOpacity style={styles.socialButton} activeOpacity={0.7}>
-                    <Ionicons
-                      name="logo-google"
-                      size={isTablet ? 24 : 20}
-                      color="#e9eef7"
-                    />
-                  </TouchableOpacity>
-                  <TouchableOpacity style={styles.socialButton} activeOpacity={0.7}>
-                    <Ionicons
-                      name="logo-apple"
-                      size={isTablet ? 24 : 20}
-                      color="#e9eef7"
-                    />
-                  </TouchableOpacity>
-                  <TouchableOpacity style={styles.socialButton} activeOpacity={0.7}>
-                    <Ionicons
-                      name="logo-facebook"
-                      size={isTablet ? 24 : 20}
-                      color="#e9eef7"
-                    />
-                  </TouchableOpacity>
-                </View>
-
-                {/* Sign Up Link */}
+                {/* Back to Login Link */}
                 <TouchableOpacity
                   activeOpacity={0.7}
-                  onPress={onSignup}
+                  onPress={onBackToLogin}
                   style={styles.linkRow}
                 >
-                  <Text style={[styles.linkText, { fontSize: isTablet ? 15 : 13 }]}>
-                    Don't have an account?{' '}
-                  </Text>
-                  <Text style={[styles.linkAccent, { fontSize: isTablet ? 15 : 13 }]}>
-                    Sign up
+                  <Ionicons name="arrow-back" size={16} color="#4ade80" />
+                  <Text style={[styles.linkAccent, { fontSize: isTablet ? 15 : 13, marginLeft: 6 }]}>
+                    Back to Login
                   </Text>
                 </TouchableOpacity>
               </View>
@@ -450,9 +384,16 @@ const styles = StyleSheet.create({
     position: 'absolute',
     backgroundColor: 'rgba(74, 222, 128, 0.08)',
   },
+  backButton: {
+    position: 'absolute',
+    zIndex: 10,
+    padding: 12,
+    borderRadius: 12,
+    backgroundColor: 'rgba(15, 23, 42, 0.6)',
+  },
   headerSection: {
     alignItems: 'center',
-    marginBottom: 20,
+    marginBottom: 30,
   },
   logoCircle: {
     backgroundColor: '#4ade80',
@@ -467,11 +408,13 @@ const styles = StyleSheet.create({
   brandName: {
     fontWeight: '900',
     color: '#e9eef7',
-    letterSpacing: 4,
+    letterSpacing: 3,
   },
   tagline: {
     color: '#94a3b8',
-    letterSpacing: 1,
+    letterSpacing: 0.5,
+    textAlign: 'center',
+    paddingHorizontal: 20,
   },
   card: {
     backgroundColor: 'rgba(15, 23, 42, 0.85)',
@@ -485,31 +428,13 @@ const styles = StyleSheet.create({
     elevation: 16,
     width: '100%',
   },
-  cardHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 8,
-  },
   cardTitle: {
     fontWeight: '700',
     color: '#e9eef7',
   },
-  badge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    backgroundColor: '#4ade80',
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderRadius: 20,
-  },
-  badgeText: {
-    color: '#0a0f1a',
-    fontWeight: '800',
-  },
   cardSubtitle: {
     color: '#94a3b8',
+    lineHeight: 20,
   },
   inputWrapper: {
     flexDirection: 'row',
@@ -531,23 +456,6 @@ const styles = StyleSheet.create({
     color: '#e9eef7',
     paddingRight: 12,
   },
-  passwordInput: {
-    paddingRight: 50,
-  },
-  eyeButton: {
-    position: 'absolute',
-    right: 12,
-    padding: 8,
-  },
-  forgotPasswordButton: {
-    alignSelf: 'flex-end',
-    marginTop: 8,
-    paddingVertical: 4,
-  },
-  forgotPasswordText: {
-    color: '#4ade80',
-    fontWeight: '600',
-  },
   errorBox: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -561,6 +469,21 @@ const styles = StyleSheet.create({
   errorText: {
     color: '#fca5a5',
     flex: 1,
+  },
+  successBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: 'rgba(74, 222, 128, 0.12)',
+    padding: 12,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(74, 222, 128, 0.25)',
+  },
+  successText: {
+    color: '#4ade80',
+    flex: 1,
+    fontWeight: '600',
   },
   primaryButton: {
     flexDirection: 'row',
@@ -583,41 +506,11 @@ const styles = StyleSheet.create({
     color: '#0a0f1a',
     letterSpacing: 0.5,
   },
-  dividerRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  dividerLine: {
-    flex: 1,
-    height: 1,
-    backgroundColor: 'rgba(148, 163, 184, 0.2)',
-  },
-  dividerText: {
-    color: '#64748b',
-    marginHorizontal: 12,
-  },
-  socialRow: {
-    flexDirection: 'row',
-    justifyContent: 'center',
-    gap: 14,
-  },
-  socialButton: {
-    width: 52,
-    height: 52,
-    borderRadius: 14,
-    backgroundColor: 'rgba(30, 41, 59, 0.7)',
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.08)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
   linkRow: {
     flexDirection: 'row',
     justifyContent: 'center',
+    alignItems: 'center',
     marginTop: 8,
-  },
-  linkText: {
-    color: '#94a3b8',
   },
   linkAccent: {
     color: '#4ade80',
@@ -625,4 +518,4 @@ const styles = StyleSheet.create({
   },
 });
 
-export default Login;
+export default ForgotPassword;

@@ -1,21 +1,30 @@
-import React from 'react'
-import { Stack } from 'expo-router'
-
+// app/_layout.tsx
 import { GluestackUIProvider } from '@/components/ui/gluestack-ui-provider';
 import '@/global.css';
+import { Stack } from 'expo-router';
+import React from 'react';
 
-const _layout = () => {
+const RootLayout = () => {
   return (
-    
     <GluestackUIProvider mode="dark">
-      <Stack screenOptions={{headerShown :false}} >
-      <Stack.Screen name="index"></Stack.Screen>
-      <Stack.Screen name="login"></Stack.Screen>
-      <Stack.Screen name="signup"></Stack.Screen>
-    </Stack>
+      <Stack
+        screenOptions={{
+          headerShown: false,
+        }}
+      >
+        <Stack.Screen 
+          name="login" 
+          options={{
+            headerShown: false,
+          }}
+        />
+        <Stack.Screen name="signup" />
+        <Stack.Screen name="index" />
+        <Stack.Screen name="forgot-password" />
+        <Stack.Screen name="modal" />
+      </Stack>
     </GluestackUIProvider>
-  
-  )
-}
+  );
+};
 
-export default _layout
+export default RootLayout;
