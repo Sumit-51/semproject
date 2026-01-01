@@ -1,29 +1,23 @@
-// app/_layout.tsx
 import { GluestackUIProvider } from '@/components/ui/gluestack-ui-provider';
 import '@/global.css';
 import { Stack } from 'expo-router';
 import React from 'react';
+import { AuthProvider } from './context/AuthContext';
 
-const RootLayout = () => {
+const RootLayout: React.FC = () => {
   return (
-    <GluestackUIProvider mode="dark">
-      <Stack
-        screenOptions={{
-          headerShown: false,
-        }}
-      >
-        <Stack.Screen 
-          name="login" 
-          options={{
-            headerShown: false,
-          }}
-        />
-        <Stack.Screen name="signup" />
-        <Stack.Screen name="index" />
-        <Stack.Screen name="forgot-password" />
-        <Stack.Screen name="modal" />
-      </Stack>
-    </GluestackUIProvider>
+    <AuthProvider>
+      <GluestackUIProvider mode="dark">
+        <Stack screenOptions={{ headerShown: false }}>
+          <Stack.Screen name="index" />
+          <Stack.Screen name="login" />
+          <Stack.Screen name="signup" />
+          <Stack.Screen name="forgot-password" />
+          <Stack.Screen name="(auth)" />
+          <Stack. Screen name="(member)" />
+        </Stack>
+      </GluestackUIProvider>
+    </AuthProvider>
   );
 };
 

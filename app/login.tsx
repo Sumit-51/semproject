@@ -3,6 +3,7 @@ import '@/global.css';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { signInWithEmailAndPassword } from 'firebase/auth';
+import { doc, getDoc } from 'firebase/firestore';
 import React, { useMemo, useState } from 'react';
 import {
   ActivityIndicator,
@@ -20,7 +21,7 @@ import {
   useWindowDimensions,
   View,
 } from 'react-native';
-import { auth } from './lib/firebase';
+import { auth, db } from './lib/firebase';
 
 const errorMessage = (code?: string): string => {
   const messages: { [key: string]: string } = {
@@ -67,28 +68,48 @@ const Login: React.FC = () => {
   const onForgotPassword = (): void => router.push('/forgot-password');
   const togglePasswordVisibility = (): void => setShowPassword(!showPassword);
 
-  const handleLogin = async (): Promise<void> => {
-    const trimmedEmail = email.trim();
-    if (!trimmedEmail || !password) {
-      setErrorText('Please enter email and password.');
-      return;
+const handleLogin = async (): Promise<void> => {
+  const trimmedEmail = email.trim();
+  if (!trimmedEmail || !password) {
+    setErrorText('Please enter email and password.');
+    return;
+  }
+  if (! isEmailValid(trimmedEmail)) {
+    setErrorText('Please enter a valid email address.');
+    return;
+  }
+  try {
+    setLoading(true);
+    setErrorText('');
+    
+    const userCred = await signInWithEmailAndPassword(auth, trimmedEmail, password);
+    
+    // Fetch user data to check enrollment status
+    const userDoc = await getDoc(doc(db, 'users', userCred.user. uid));
+    
+    if (userDoc.exists()) {
+      const userData = userDoc.data();
+      
+      if (userData. enrollmentStatus === 'approved') {
+        // User is approved, go to member dashboard
+        router.replace('/(member)/home' as any);
+      } else if (userData.enrollmentStatus === 'pending') {
+        // User has pending enrollment
+        router.replace('/(auth)/pending-approval' as any);
+      } else {
+        // User needs to select gym
+        router.replace('/(auth)/gym-selection' as any);
+      }
+    } else {
+      // New user, needs to select gym
+      router.replace('/(auth)/gym-selection' as any);
     }
-    if (!isEmailValid(trimmedEmail)) {
-      setErrorText('Please enter a valid email address.');
-      return;
-    }
-    try {
-      setLoading(true);
-      setErrorText('');
-      await signInWithEmailAndPassword(auth, trimmedEmail, password);
-      router.replace('/');
-    } catch (err: any) {
-      setErrorText(errorMessage(err?.code));
-    } finally {
-      setLoading(false);
-    }
-  };
-
+  } catch (err:  any) {
+    setErrorText(errorMessage(err?. code));
+  } finally {
+    setLoading(false);
+  }
+};
   return (
     <SafeAreaView style={styles.safeArea}>
       <KeyboardAvoidingView
