@@ -1,7 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import { Redirect, Tabs } from 'expo-router';
 import React from 'react';
-import { ActivityIndicator, View } from 'react-native';
+import { ActivityIndicator, Platform, View } from 'react-native';
 import { useAuth } from '../context/AuthContext';
 
 const MemberLayout: React.FC = () => {
@@ -26,15 +26,16 @@ const MemberLayout: React.FC = () => {
         tabBarStyle: {
           backgroundColor: '#0f172a',
           borderTopColor: 'rgba(255,255,255,0.1)',
-          height: 70,
-          paddingBottom: 10,
-          paddingTop: 10,
+          height: Platform.OS === 'ios' ? 90 : 75,
+          paddingBottom: Platform.OS === 'ios' ? 30 : 12,
+          paddingTop: 8,
         },
         tabBarActiveTintColor: '#4ade80',
         tabBarInactiveTintColor: '#64748b',
         tabBarLabelStyle: {
-          fontSize: 12,
+          fontSize: 11,
           fontWeight: '600',
+          marginBottom: Platform.OS === 'android' ? 8 : 0,
         },
       }}
     >
@@ -48,9 +49,9 @@ const MemberLayout: React.FC = () => {
         }}
       />
       <Tabs.Screen
-        name="attendance"
+        name="mygym"
         options={{
-          title: 'Attendance',
+          title: 'My gym',
           tabBarIcon: ({ color, size }) => (
             <Ionicons name="calendar-outline" size={size} color={color} />
           ),
@@ -77,7 +78,13 @@ const MemberLayout: React.FC = () => {
       <Tabs.Screen
         name="editprofile"
         options={{
-          href: null, // This hides it from the tab bar
+          href: null,
+        }}
+      />
+      <Tabs.Screen
+        name="changepassword"
+        options={{
+          href: null,
         }}
       />
     </Tabs>

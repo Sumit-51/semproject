@@ -40,9 +40,9 @@ const MemberHome: React.FC = () => {
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
       >
-        <View style={styles. header}>
+        <View style={styles.header}>
           <View>
-            <Text style={styles. greeting}>{getGreeting()},</Text>
+            <Text style={styles.greeting}>{getGreeting()},</Text>
             <Text style={styles.userName}>{userData?.displayName || 'Member'}</Text>
           </View>
           <TouchableOpacity style={styles.notificationBtn}>
@@ -69,13 +69,13 @@ const MemberHome: React.FC = () => {
         >
           <View style={styles.checkInIconContainer}>
             <Ionicons
-              name={isCheckedIn ?  'exit-outline' : 'enter-outline'}
+              name={isCheckedIn ? 'exit-outline' : 'enter-outline'}
               size={40}
               color="#0a0f1a"
             />
           </View>
           <Text style={styles.checkInText}>
-            {isCheckedIn ? 'Check Out' :  'Check In'}
+            {isCheckedIn ? 'Check Out' : 'Check In'}
           </Text>
           <Text style={styles.checkInSubtext}>
             {isCheckedIn ? 'Tap to end your session' : 'Tap to start your workout'}
@@ -93,9 +93,9 @@ const MemberHome: React.FC = () => {
             <Text style={styles.statNumber}>18</Text>
             <Text style={styles.statLabel}>This Month</Text>
           </View>
-          <View style={styles. statCard}>
+          <View style={styles.statCard}>
             <Ionicons name="time-outline" size={28} color="#a855f7" />
-            <Text style={styles.statNumber}>1. 5h</Text>
+            <Text style={styles.statNumber}>1.5h</Text>
             <Text style={styles.statLabel}>Avg Duration</Text>
           </View>
         </View>
@@ -107,12 +107,12 @@ const MemberHome: React.FC = () => {
               <Text style={styles.activeBadgeText}>Active</Text>
             </View>
           </View>
-          <View style={styles. membershipDetails}>
+          <View style={styles.membershipDetails}>
             <View style={styles.membershipRow}>
               <Text style={styles.membershipLabel}>Plan</Text>
               <Text style={styles.membershipValue}>Monthly Premium</Text>
             </View>
-            <View style={styles. membershipRow}>
+            <View style={styles.membershipRow}>
               <Text style={styles.membershipLabel}>Expires</Text>
               <Text style={styles.membershipValue}>Jan 31, 2026</Text>
             </View>
@@ -157,13 +157,13 @@ const styles = StyleSheet.create({
     bottom: height * 0.3,
     left: -width * 0.15,
   },
-  header:  {
+  header: {
     flexDirection: 'row',
-    justifyContent:  'space-between',
+    justifyContent: 'space-between',
     alignItems: 'center',
     marginBottom: height * 0.025,
   },
-  greeting:  {
+  greeting: {
     fontSize: 16,
     color: '#94a3b8',
   },
@@ -192,7 +192,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.06)',
   },
-  gymInfo:  {
+  gymInfo: {
     flex: 1,
     marginLeft: 12,
   },
@@ -206,12 +206,12 @@ const styles = StyleSheet.create({
     color: '#64748b',
     marginTop: 2,
   },
-  statusBadge:  {
+  statusBadge: {
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: 'rgba(74, 222, 128, 0.15)',
     paddingHorizontal: 10,
-    paddingVertical:  6,
+    paddingVertical: 6,
     borderRadius: 20,
   },
   statusDot: {
@@ -221,7 +221,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#4ade80',
     marginRight: 6,
   },
-  statusText:  {
+  statusText: {
     fontSize: 12,
     fontWeight: '600',
     color: '#4ade80',
@@ -234,7 +234,7 @@ const styles = StyleSheet.create({
     marginBottom: height * 0.025,
     shadowColor: '#4ade80',
     shadowOffset: { width: 0, height: 8 },
-    shadowOpacity:  0.35,
+    shadowOpacity: 0.35,
     shadowRadius: 16,
     elevation: 10,
   },
@@ -242,7 +242,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#f97316',
     shadowColor: '#f97316',
   },
-  checkInIconContainer:  {
+  checkInIconContainer: {
     width: 80,
     height: 80,
     borderRadius: 40,
@@ -256,7 +256,7 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: '#0a0f1a',
   },
-  checkInSubtext:  {
+  checkInSubtext: {
     fontSize: 14,
     color: 'rgba(10, 15, 26, 0.7)',
     marginTop: 4,
@@ -276,7 +276,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.06)',
   },
-  statNumber:  {
+  statNumber: {
     fontSize: 22,
     fontWeight: '700',
     color: '#e9eef7',
@@ -285,10 +285,10 @@ const styles = StyleSheet.create({
   statLabel: {
     fontSize: 11,
     color: '#64748b',
-    marginTop:  4,
+    marginTop: 4,
   },
   membershipCard: {
-    backgroundColor:  'rgba(15, 23, 42, 0.8)',
+    backgroundColor: 'rgba(15, 23, 42, 0.8)',
     borderRadius: 20,
     padding: 20,
     borderWidth: 1,
@@ -301,15 +301,15 @@ const styles = StyleSheet.create({
     marginBottom: 16,
   },
   membershipTitle: {
-    fontSize:  18,
-    fontWeight:  '700',
+    fontSize: 18,
+    fontWeight: '700',
     color: '#e9eef7',
   },
   activeBadge: {
     backgroundColor: 'rgba(74, 222, 128, 0.15)',
     paddingHorizontal: 12,
-    paddingVertical:  6,
-    borderRadius:  20,
+    paddingVertical: 6,
+    borderRadius: 20,
   },
   activeBadgeText: {
     fontSize: 12,

@@ -30,7 +30,7 @@ const EditProfile: React.FC = () => {
   const [email, setEmail] = useState(userData?.email || '');
   const [loading, setLoading] = useState(false);
 
-  const handleSave = async (): Promise<void> => {
+  const handleSave = (): void => {
     if (!displayName.trim()) {
       Alert.alert('Error', 'Display name cannot be empty');
       return;
@@ -46,37 +46,53 @@ const EditProfile: React.FC = () => {
       return;
     }
 
-    setLoading(true);
-    try {
-      // Update Firebase Auth profile
-      await updateProfile(user, {
-        displayName: displayName,
-      });
+    // Show confirmation dialog before saving
+    Alert.alert(
+      'Confirm Changes',
+      'Are you sure you want to save these changes to your profile?',
+      [
+        {
+          text: 'Cancel',
+          style: 'cancel',
+        },
+        {
+          text: 'Save',
+          onPress: async () => {
+            setLoading(true);
+            try {
+              // Update Firebase Auth profile
+              await updateProfile(user, {
+                displayName: displayName,
+              });
 
-      // Update email if it changed
-      if (email !== user.email) {
-        await updateEmail(user, email);
-      }
+              // Update email if it changed
+              if (email !== user.email) {
+                await updateEmail(user, email);
+              }
 
-      // Update Firestore document
-      const userDocRef = doc(db, 'users', user.uid);
-      await updateDoc(userDocRef, {
-        displayName: displayName,
-        email: email,
-      });
+              // Update Firestore document
+              const userDocRef = doc(db, 'users', user.uid);
+              await updateDoc(userDocRef, {
+                displayName: displayName,
+                email: email,
+              });
 
-      // Refresh user data
-      await refreshUserData();
+              // Refresh user data
+              await refreshUserData();
 
-      Alert.alert('Success', 'Profile updated successfully', [
-        { text: 'OK', onPress: () => router.back() }
-      ]);
-    } catch (error: any) {
-      console.error('Update profile error:', error);
-      Alert.alert('Error', error.message || 'Failed to update profile. Please try again.');
-    } finally {
-      setLoading(false);
-    }
+              Alert.alert('Success', 'Profile updated successfully', [
+                { text: 'OK', onPress: () => router.back() }
+              ]);
+            } catch (error: any) {
+              console.error('Update profile error:', error);
+              Alert.alert('Error', error.message || 'Failed to update profile. Please try again.');
+            } finally {
+              setLoading(false);
+            }
+          },
+        },
+      ]
+    );
   };
 
   return (
@@ -202,6 +218,7 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#0a0f1a',
+    paddingTop: Platform.OS === 'android' ? StatusBar.currentHeight : 0,
   },
   keyboardView: {
     flex: 1,

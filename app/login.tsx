@@ -5,7 +5,7 @@ import { useRouter } from 'expo-router';
 import { signInWithEmailAndPassword } from 'firebase/auth';
 import { doc, getDoc } from 'firebase/firestore';
 import React, { useMemo, useState } from 'react';
-import {                                                    
+import {
   ActivityIndicator,
   Keyboard,
   KeyboardAvoidingView,
@@ -417,7 +417,7 @@ const handleLogin = async (): Promise<void> => {
                     />
                   </TouchableOpacity>
                   
-                  
+                  ``
                 </View>
 
                 {/* Sign Up Link */}

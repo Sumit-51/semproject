@@ -2,7 +2,9 @@ import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import React from 'react';
 import {
+  Alert,
   Dimensions,
+  Platform,
   ScrollView,
   StatusBar,
   StyleSheet,
@@ -18,13 +20,33 @@ const Profile: React.FC = () => {
   const { userData, logout } = useAuth();
   const router = useRouter();
 
-  const handleLogout = async (): Promise<void> => {
-    await logout();
-    router.replace('/login');
+  const handleLogout = (): void => {
+    Alert.alert(
+      'Logout',
+      'Are you sure you want to logout?',
+      [
+        {
+          text: 'Cancel',
+          style: 'cancel',
+        },
+        {
+          text: 'Logout',
+          style: 'destructive',
+          onPress: async () => {
+            await logout();
+            router.replace('/login');
+          },
+        },
+      ]
+    );
   };
 
   const handleEditProfile = (): void => {
     router.push('/editprofile');
+  };
+
+  const handleChangePassword = (): void => {
+    router.push('/changepassword');
   };
 
   return (
@@ -57,7 +79,7 @@ const Profile: React.FC = () => {
             <Ionicons name="chevron-forward" size={20} color="#64748b" />
           </TouchableOpacity>
 
-          <TouchableOpacity style={styles.menuItem}>
+          <TouchableOpacity style={styles.menuItem} onPress={handleChangePassword}>
             <Ionicons name="lock-closed-outline" size={22} color="#3b82f6" />
             <Text style={styles.menuText}>Change Password</Text>
             <Ionicons name="chevron-forward" size={20} color="#64748b" />
@@ -91,6 +113,7 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#0a0f1a',
+    paddingTop: Platform.OS === 'android' ? StatusBar.currentHeight : 0,
   },
   scrollContent: {
     paddingHorizontal: width * 0.05,
