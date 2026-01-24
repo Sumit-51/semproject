@@ -17,7 +17,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { doc, getDoc, updateDoc } from 'firebase/firestore';
 import { useAuth } from '../context/AuthContext';
 import { db } from '../lib/firebase';
-import { Gym } from '../types';
+import { Gym } from '../types/index';
 
 const { width, height } = Dimensions.get('window');
 const isSmall = height < 700;
@@ -40,21 +40,9 @@ const MyGym: React.FC = () => {
   }, [userData]);
 
   const checkEnrollmentAndFetchGym = async () => {
-    // Redirect based on enrollment status
-    if (userData?.enrollmentStatus === 'pending') {
-      router.replace('/pending-approval');
-      return;
-    }
-
-    if (userData?.enrollmentStatus === 'none' || !userData?.gymId) {
-      setLoading(false);
-      return;
-    }
-
     if (userData?.enrollmentStatus === 'approved' && userData?.gymId) {
       await fetchGymData(userData.gymId);
     }
-
     setLoading(false);
   };
 
@@ -83,9 +71,7 @@ const MyGym: React.FC = () => {
       const today = new Date().toDateString();
       const yesterday = new Date(Date.now() - 86400000).toDateString();
 
-      if (lastCheckInDate === yesterday) {
-        setStreak(savedStreak);
-      } else if (lastCheckInDate === today) {
+      if (lastCheckInDate === yesterday || lastCheckInDate === today) {
         setStreak(savedStreak);
       } else {
         setStreak(0);
@@ -150,7 +136,7 @@ const MyGym: React.FC = () => {
   const handleLeaveGym = () => {
     Alert.alert(
       'Leave Gym',
-      `Are you sure you want to leave ${gym?.name}?\n\n⚠️ WARNING: Your membership payment is non-refundable. If you leave, you will lose access to all gym facilities and your remaining membership days.`,
+      `Are you sure you want to leave ${gym?.name}?\n\n⚠️ WARNING: Your membership payment is non-refundable.`,
       [
         { text: 'Cancel', style: 'cancel' },
         {
@@ -159,7 +145,7 @@ const MyGym: React.FC = () => {
           onPress: async () => {
             try {
               if (!userData?.uid) return;
-              
+
               await updateDoc(doc(db, 'users', userData.uid), {
                 gymId: null,
                 enrollmentStatus: 'none',
@@ -196,22 +182,6 @@ const MyGym: React.FC = () => {
     return 'Good Evening';
   };
 
-  const calculateMembershipExpiry = () => {
-    if (!userData?.enrolledAt || !userData?.planDuration) return null;
-    const enrolledDate = new Date(userData.enrolledAt);
-    const expiryDate = new Date(enrolledDate);
-    expiryDate.setMonth(expiryDate.getMonth() + userData.planDuration);
-    return expiryDate;
-  };
-
-  const getDaysRemaining = () => {
-    const expiry = calculateMembershipExpiry();
-    if (!expiry) return 0;
-    const today = new Date();
-    const diff = expiry.getTime() - today.getTime();
-    return Math.max(0, Math.ceil(diff / (1000 * 60 * 60 * 24)));
-  };
-
   if (loading) {
     return (
       <View style={styles.loadingContainer}>
@@ -222,109 +192,50 @@ const MyGym: React.FC = () => {
     );
   }
 
-  // Not enrolled
-  if (userData?.enrollmentStatus === 'none' || !userData?.gymId) {
-    return (
-      <View style={styles.container}>
-        <StatusBar barStyle="light-content" backgroundColor="#0a0f1a" />
-        <View style={styles.emptyContainer}>
-          <Ionicons name="fitness-outline" size={80} color="#64748b" />
-          <Text style={styles.emptyTitle}>No Gym Enrolled</Text>
-          <Text style={styles.emptySubtext}>
-            Browse available gyms on the Home tab and join one to get started!
-          </Text>
-          <TouchableOpacity
-            style={styles.browseButton}
-            onPress={() => router.push('/(member)/home')}
-          >
-            <Ionicons name="search" size={20} color="#0a0f1a" />
-            <Text style={styles.browseButtonText}>Browse Gyms</Text>
-          </TouchableOpacity>
-        </View>
-      </View>
-    );
-  }
-
-  // Rejected
-  if (userData?.enrollmentStatus === 'rejected') {
-    return (
-      <View style={styles.container}>
-        <StatusBar barStyle="light-content" backgroundColor="#0a0f1a" />
-        <View style={styles.emptyContainer}>
-          <Ionicons name="close-circle-outline" size={80} color="#f87171" />
-          <Text style={styles.emptyTitle}>Enrollment Rejected</Text>
-          <Text style={styles.emptySubtext}>
-            Your enrollment request was rejected. Please contact the gym for more information.
-          </Text>
-          <TouchableOpacity
-            style={styles.browseButton}
-            onPress={() => router.push('/(member)/home')}
-          >
-            <Text style={styles.browseButtonText}>Browse Other Gyms</Text>
-          </TouchableOpacity>
-        </View>
-      </View>
-    );
-  }
-
-  // Approved and enrolled
   return (
     <View style={styles.container}>
       <StatusBar barStyle="light-content" backgroundColor="#0a0f1a" />
-      <View style={styles.accentCircleOne} />
-      <View style={styles.accentCircleTwo} />
-
       <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+
         <View style={styles.header}>
           <View>
             <Text style={styles.greeting}>{getGreeting()},</Text>
             <Text style={styles.userName}>{userData?.displayName || 'Member'}</Text>
           </View>
-          <TouchableOpacity style={styles.notificationBtn}>
-            <Ionicons name="notifications-outline" size={24} color="#e9eef7" />
-          </TouchableOpacity>
         </View>
 
-        {/* Gym Card */}
         <View style={styles.gymCard}>
           <Ionicons name="barbell-outline" size={24} color="#4ade80" />
           <View style={styles.gymInfo}>
             <Text style={styles.gymName}>{gym?.name || 'Loading...'}</Text>
             <Text style={styles.gymAddress}>{gym?.address || 'Loading...'}</Text>
           </View>
-          <View style={styles.statusBadge}>
-            <View style={styles.statusDot} />
-            <Text style={styles.statusText}>Active</Text>
-          </View>
         </View>
 
-        {/* Check In Button */}
         <TouchableOpacity
           style={[styles.checkInBtn, isCheckedIn && styles.checkOutBtn]}
-          activeOpacity={0.85}
           onPress={handleCheckInOut}
         >
-          <View style={styles.checkInIconContainer}>
-            <Ionicons name={isCheckedIn ? 'exit-outline' : 'enter-outline'} size={40} color="#0a0f1a" />
-          </View>
+          <Ionicons name={isCheckedIn ? 'exit-outline' : 'enter-outline'} size={40} color="#0a0f1a" />
           <Text style={styles.checkInText}>{isCheckedIn ? 'Check Out' : 'Check In'}</Text>
           <Text style={styles.checkInSubtext}>
             {isCheckedIn ? `Session duration: ${formatTime(timerSeconds)}` : 'Tap to start your workout'}
           </Text>
         </TouchableOpacity>
 
-        {/* Stats Grid */}
         <View style={styles.statsGrid}>
           <View style={styles.statCard}>
             <Ionicons name="flame-outline" size={28} color="#f97316" />
             <Text style={styles.statNumber}>{streak}</Text>
             <Text style={styles.statLabel}>Day Streak</Text>
           </View>
+
           <View style={styles.statCard}>
             <Ionicons name="calendar-outline" size={28} color="#3b82f6" />
             <Text style={styles.statNumber}>{sessionsThisMonth}</Text>
             <Text style={styles.statLabel}>This Month</Text>
           </View>
+
           <View style={styles.statCard}>
             <Ionicons name="time-outline" size={28} color="#a855f7" />
             <Text style={styles.statNumber}>{formatTime(averageDuration)}</Text>
@@ -332,48 +243,11 @@ const MyGym: React.FC = () => {
           </View>
         </View>
 
-        {/* Membership Card */}
-        <View style={styles.membershipCard}>
-          <View style={styles.membershipHeader}>
-            <Text style={styles.membershipTitle}>Membership Status</Text>
-            <View style={styles.activeBadge}>
-              <Text style={styles.activeBadgeText}>Active</Text>
-            </View>
-          </View>
-          <View style={styles.membershipDetails}>
-            <View style={styles.membershipRow}>
-              <Text style={styles.membershipLabel}>Plan</Text>
-              <Text style={styles.membershipValue}>
-                {userData?.paymentMethod === 'Quarterly' ? 'Quarterly (3 months)' :
-                 userData?.paymentMethod === '6-Month' ? '6 Month Plan' : 'Monthly'}
-              </Text>
-            </View>
-            <View style={styles.membershipRow}>
-              <Text style={styles.membershipLabel}>Enrolled</Text>
-              <Text style={styles.membershipValue}>
-                {userData?.enrolledAt ? new Date(userData.enrolledAt).toLocaleDateString() : 'N/A'}
-              </Text>
-            </View>
-            <View style={styles.membershipRow}>
-              <Text style={styles.membershipLabel}>Expires</Text>
-              <Text style={styles.membershipValue}>
-                {calculateMembershipExpiry()?.toLocaleDateString() || 'N/A'}
-              </Text>
-            </View>
-            <View style={styles.membershipRow}>
-              <Text style={styles.membershipLabel}>Days Left</Text>
-              <Text style={[styles.membershipValue, { color: '#4ade80' }]}>
-                {getDaysRemaining()} days
-              </Text>
-            </View>
-          </View>
-        </View>
-
-        {/* Leave Gym Button */}
         <TouchableOpacity style={styles.leaveButton} onPress={handleLeaveGym}>
           <Ionicons name="exit-outline" size={20} color="#f87171" />
           <Text style={styles.leaveButtonText}>Leave Gym</Text>
         </TouchableOpacity>
+
       </ScrollView>
     </View>
   );
@@ -381,13 +255,25 @@ const MyGym: React.FC = () => {
 
 export default MyGym;
 
+
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#0a0f1a', paddingTop: Platform.OS === 'android' ? StatusBar.currentHeight : 0 },
   loadingContainer: { flex: 1, backgroundColor: '#0a0f1a', justifyContent: 'center', alignItems: 'center', paddingTop: Platform.OS === 'android' ? StatusBar.currentHeight : 0 },
   loadingText: { color: '#94a3b8', marginTop: 16, fontSize: 16 },
   emptyContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', paddingHorizontal: width * 0.1 },
+  iconContainer: { marginBottom: 24 },
+  iconCircle: { width: 120, height: 120, borderRadius: 60, backgroundColor: 'rgba(251, 191, 36, 0.15)', alignItems: 'center', justifyContent: 'center' },
   emptyTitle: { fontSize: 24, fontWeight: '700', color: '#e9eef7', marginTop: 20, textAlign: 'center' },
   emptySubtext: { fontSize: 15, color: '#64748b', marginTop: 12, textAlign: 'center', lineHeight: 22 },
+  statusCard: { backgroundColor: 'rgba(15, 23, 42, 0.8)', borderRadius: 20, padding: 20, width: '100%', marginTop: 24, borderWidth: 1, borderColor: 'rgba(255,255,255,0.06)' },
+  statusRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  statusLabel: { fontSize: 14, color: '#64748b' },
+  statusValue: { fontSize: 14, fontWeight: '600', color: '#e9eef7' },
+  pendingBadge: { backgroundColor: 'rgba(251, 191, 36, 0.15)', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 20 },
+  pendingBadgeText: { fontSize: 12, fontWeight: '700', color: '#fbbf24' },
+  divider: { height: 1, backgroundColor: 'rgba(255,255,255,0.06)', marginVertical: 14 },
+  refreshButton: { flexDirection: 'row', alignItems: 'center', gap: 10, backgroundColor: 'rgba(30, 41, 59, 0.8)', paddingHorizontal: 24, paddingVertical: 14, borderRadius: 14, marginTop: 20, borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)' },
+  refreshButtonText: { fontSize: 16, fontWeight: '600', color: '#e9eef7' },
   browseButton: { flexDirection: 'row', alignItems: 'center', gap: 10, backgroundColor: '#4ade80', paddingHorizontal: 24, paddingVertical: 14, borderRadius: 14, marginTop: 24 },
   browseButtonText: { fontSize: 16, fontWeight: '700', color: '#0a0f1a' },
   scrollContent: { paddingHorizontal: width * 0.05, paddingTop: height * 0.02, paddingBottom: height * 0.02 },

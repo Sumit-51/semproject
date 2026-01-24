@@ -22,7 +22,7 @@ const MemberLayout: React.FC = () => {
   return (
     <Tabs
       screenOptions={{
-        headerShown: true,
+        headerShown: false,
         tabBarStyle: {
           backgroundColor: '#0f172a',
           borderTopColor: 'rgba(255,255,255,0.1)',
