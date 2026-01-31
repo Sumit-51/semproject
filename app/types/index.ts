@@ -1,6 +1,8 @@
 export type UserRole = 'superAdmin' | 'gymAdmin' | 'member';
 export type EnrollmentStatus = 'none' | 'pending' | 'approved' | 'rejected';
 export type PaymentMethod = 'online' | 'offline' | 'Quarterly' | '6-Month';
+export type IssueType = 'Equipment' | 'Cleanliness' | 'Staff' | 'Safety' | 'Other';
+export type ReportStatus = 'pending' | 'reviewed' | 'resolved' | 'rejected';
 
 export interface Gym {
   id: string;
@@ -40,6 +42,7 @@ export interface UserData {
   enrolledAt: Date | null;
   createdAt: Date;
   planDuration?: number;
+  timeSlot?: 'Morning' | 'Evening' | 'Night' | null;
 }
 
 export interface Enrollment {
@@ -69,4 +72,19 @@ export interface PlanChangeRequest {
   createdAt: Date;
   reviewedAt: Date | null;
   reviewedBy: string | null;
+}
+export interface GymReport {
+  id?: string; // Optional because Firestore adds it
+  gymId: string;
+  gymName: string;
+  userId: string;
+  userName: string;
+  userEmail: string;
+  issueTypes: IssueType[]; // Array of issues (multiple selection)
+  description: string;
+  status: ReportStatus;
+  createdAt: Date;
+  reviewedAt?: Date | null;
+  reviewedBy?: string | null;
+  adminNotes?: string;
 }

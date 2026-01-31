@@ -1,17 +1,26 @@
 import { Ionicons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useRouter } from "expo-router";
-import { doc, getDoc, updateDoc } from "firebase/firestore";
+import {
+    addDoc,
+    collection,
+    doc,
+    getDoc,
+    serverTimestamp,
+    updateDoc,
+} from "firebase/firestore";
 import React, { useEffect, useRef, useState } from "react";
 import {
     ActivityIndicator,
     Alert,
     Dimensions,
+    Modal,
     Platform,
     ScrollView,
     StatusBar,
     StyleSheet,
     Text,
+    TextInput,
     TouchableOpacity,
     View,
 } from "react-native";
@@ -22,21 +31,28 @@ import { Gym } from "../types/index";
 const { width, height } = Dimensions.get("window");
 const isSmall = height < 700;
 
+type IssueType = "Equipment" | "Cleanliness" | "Staff" | "Safety" | "Other";
+
 const MyGym: React.FC = () => {
   const { userData, refreshUserData } = useAuth();
-  console.log(
-    "=== MYGYM RENDERING, enrollmentStatus:",
-    userData?.enrollmentStatus,
-  );
   const router = useRouter();
   const [gym, setGym] = useState<Gym | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
   const [isCheckedIn, setIsCheckedIn] = useState<boolean>(false);
   const [timerSeconds, setTimerSeconds] = useState<number>(0);
   const [streak, setStreak] = useState<number>(0);
-  const [sessionsThisMonth, setSessionsThisMonth] = useState<number>(0);
   const [totalDuration, setTotalDuration] = useState<number>(0);
   const timerRef = useRef<number | null>(null);
+
+  const [checkInConfirm, setCheckInConfirm] = useState<boolean>(false);
+  const [checkOutConfirm, setCheckOutConfirm] = useState<boolean>(false);
+
+  const [showReportModal, setShowReportModal] = useState<boolean>(false);
+  const [selectedIssues, setSelectedIssues] = useState<IssueType[]>([]);
+  const [reportDescription, setReportDescription] = useState<string>("");
+  const [submittingReport, setSubmittingReport] = useState<boolean>(false);
+
+  const [checkoutSuccess, setCheckoutSuccess] = useState<boolean>(false);
 
   useEffect(() => {
     checkEnrollmentAndFetchGym();
@@ -69,8 +85,6 @@ const MyGym: React.FC = () => {
     try {
       const lastCheckInDate = await AsyncStorage.getItem("lastCheckInDate");
       const savedStreak = Number(await AsyncStorage.getItem("streak")) || 0;
-      const savedSessions =
-        Number(await AsyncStorage.getItem("sessionsThisMonth")) || 0;
       const savedDuration =
         Number(await AsyncStorage.getItem("totalDuration")) || 0;
 
@@ -83,66 +97,101 @@ const MyGym: React.FC = () => {
         setStreak(0);
       }
 
-      setSessionsThisMonth(savedSessions);
       setTotalDuration(savedDuration);
     } catch (error) {
       console.error("Error loading stats:", error);
     }
   };
 
-  const handleCheckInOut = async () => {
-    if (!isCheckedIn) {
-      const now = new Date();
-      setIsCheckedIn(true);
-      timerRef.current = setInterval(
-        () => setTimerSeconds((prev) => prev + 1),
-        1000,
-      );
-
-      const lastCheckInDate = await AsyncStorage.getItem("lastCheckInDate");
-      const today = now.toDateString();
-      const yesterday = new Date(now.getTime() - 86400000).toDateString();
-
-      let newStreak = 1;
-      if (lastCheckInDate === yesterday) {
-        const savedStreak = Number(await AsyncStorage.getItem("streak")) || 0;
-        newStreak = savedStreak + 1;
-      }
-
-      setStreak(newStreak);
-      await AsyncStorage.setItem("streak", String(newStreak));
+  const handleCheckInPress = () => {
+    if (!checkInConfirm) {
+      setCheckInConfirm(true);
+      setTimeout(() => setCheckInConfirm(false), 3000);
     } else {
-      if (timerRef.current) {
-        clearInterval(timerRef.current);
-        timerRef.current = null;
-      }
-      setIsCheckedIn(false);
-
-      const duration = timerSeconds;
-      setTotalDuration((prev) => prev + duration);
-
-      const now = new Date();
-      const sessionMonth = now.getMonth();
-      const storedMonth = await AsyncStorage.getItem("sessionMonth");
-      let newSessions = sessionsThisMonth;
-
-      if (storedMonth === String(sessionMonth)) {
-        newSessions = sessionsThisMonth + 1;
-      } else {
-        newSessions = 1;
-        await AsyncStorage.setItem("sessionMonth", String(sessionMonth));
-      }
-
-      setSessionsThisMonth(newSessions);
-      await AsyncStorage.setItem(
-        "totalDuration",
-        String(totalDuration + duration),
-      );
-      await AsyncStorage.setItem("sessionsThisMonth", String(newSessions));
-      await AsyncStorage.setItem("lastCheckInDate", new Date().toDateString());
-
-      setTimerSeconds(0);
+      performCheckIn();
+      setCheckInConfirm(false);
     }
+  };
+
+  const handleCheckOutPress = () => {
+    if (!checkOutConfirm) {
+      setCheckOutConfirm(true);
+      setCheckoutSuccess(false);
+      setTimeout(() => setCheckOutConfirm(false), 3000);
+    } else {
+      performCheckOut();
+      setCheckOutConfirm(false);
+    }
+  };
+
+  const performCheckIn = async () => {
+    const now = new Date();
+    setIsCheckedIn(true);
+    setCheckoutSuccess(false);
+    timerRef.current = setInterval(
+      () => setTimerSeconds((prev) => prev + 1),
+      1000,
+    );
+
+    const lastCheckInDate = await AsyncStorage.getItem("lastCheckInDate");
+    const yesterday = new Date(now.getTime() - 86400000).toDateString();
+
+    let newStreak = 1;
+    if (lastCheckInDate === yesterday) {
+      const savedStreak = Number(await AsyncStorage.getItem("streak")) || 0;
+      newStreak = savedStreak + 1;
+    }
+
+    setStreak(newStreak);
+    await AsyncStorage.setItem("streak", String(newStreak));
+    await AsyncStorage.setItem("lastCheckInDate", now.toDateString());
+  };
+
+  const performCheckOut = async () => {
+    if (timerRef.current) {
+      clearInterval(timerRef.current);
+      timerRef.current = null;
+    }
+    setIsCheckedIn(false);
+    setCheckoutSuccess(true);
+
+    const duration = timerSeconds;
+    const now = new Date();
+    const dateKey = now.toISOString().split("T")[0]; // "YYYY-MM-DD"
+
+    setTotalDuration((prev) => prev + duration);
+
+    await AsyncStorage.setItem(
+      "totalDuration",
+      String(totalDuration + duration),
+    );
+    await AsyncStorage.setItem("lastCheckOutDate", now.toDateString());
+
+    // Save to check-in history for Activity Log
+    try {
+      const historyJson = await AsyncStorage.getItem("checkInHistory");
+      const history = historyJson ? JSON.parse(historyJson) : [];
+
+      // Check if today already has an entry, update it or add new
+      const existingIndex = history.findIndex(
+        (record: any) => record.date === dateKey,
+      );
+      if (existingIndex >= 0) {
+        history[existingIndex].duration += duration;
+      } else {
+        history.push({ date: dateKey, duration });
+      }
+
+      await AsyncStorage.setItem("checkInHistory", JSON.stringify(history));
+    } catch (error) {
+      console.error("Error saving check-in history:", error);
+    }
+
+    setTimerSeconds(0);
+
+    setTimeout(() => {
+      setCheckoutSuccess(false);
+    }, 5000);
   };
 
   const handleLeaveGym = () => {
@@ -157,7 +206,6 @@ const MyGym: React.FC = () => {
           onPress: async () => {
             try {
               if (!userData?.uid) return;
-
               await updateDoc(doc(db, "users", userData.uid), {
                 gymId: null,
                 enrollmentStatus: "none",
@@ -165,12 +213,8 @@ const MyGym: React.FC = () => {
                 transactionId: null,
                 enrolledAt: null,
               });
-
               await refreshUserData();
-
-              // Redirect to home tab to browse other gyms
               router.replace("/(member)/home");
-
               Alert.alert(
                 "Success",
                 "You have left the gym. Browse the home page to find a new gym!",
@@ -194,15 +238,59 @@ const MyGym: React.FC = () => {
     }
   };
 
+  const handleIssueToggle = (issue: IssueType) => {
+    if (selectedIssues.includes(issue)) {
+      setSelectedIssues(selectedIssues.filter((item) => item !== issue));
+    } else {
+      setSelectedIssues([...selectedIssues, issue]);
+    }
+  };
+
+  const handleSubmitReport = async () => {
+    if (selectedIssues.length === 0) {
+      Alert.alert("Error", "Please select at least one issue type");
+      return;
+    }
+    if (!reportDescription.trim()) {
+      Alert.alert("Error", "Please describe the issue(s)");
+      return;
+    }
+
+    setSubmittingReport(true);
+    try {
+      await addDoc(collection(db, "gymReports"), {
+        gymId: gym?.id,
+        gymName: gym?.name,
+        userId: userData?.uid,
+        userName: userData?.displayName,
+        userEmail: userData?.email,
+        issueTypes: selectedIssues,
+        description: reportDescription,
+        status: "pending",
+        createdAt: serverTimestamp(),
+      });
+
+      Alert.alert(
+        "Success",
+        "Your report has been submitted. The gym admin will review it shortly.",
+      );
+      setShowReportModal(false);
+      setSelectedIssues([]);
+      setReportDescription("");
+    } catch (error) {
+      console.error("Error submitting report:", error);
+      Alert.alert("Error", "Failed to submit report. Please try again.");
+    } finally {
+      setSubmittingReport(false);
+    }
+  };
+
   const formatTime = (seconds: number) => {
     const hrs = Math.floor(seconds / 3600);
     const mins = Math.floor((seconds % 3600) / 60);
     const secs = seconds % 60;
     return `${hrs ? hrs + "h " : ""}${mins ? mins + "m " : ""}${secs}s`;
   };
-
-  const averageDuration =
-    sessionsThisMonth > 0 ? Math.floor(totalDuration / sessionsThisMonth) : 0;
 
   const getGreeting = (): string => {
     const hour = new Date().getHours();
@@ -221,27 +309,23 @@ const MyGym: React.FC = () => {
     );
   }
 
-  // PENDING STATUS
   if (userData?.enrollmentStatus === "pending") {
     return (
       <View style={styles.container}>
         <StatusBar barStyle="light-content" backgroundColor="#0a0f1a" />
         <View style={styles.accentCircleOne} />
         <View style={styles.accentCircleTwo} />
-
         <View style={styles.emptyContainer}>
           <View style={styles.iconContainer}>
             <View style={styles.iconCircle}>
               <Ionicons name="time-outline" size={64} color="#fbbf24" />
             </View>
           </View>
-
           <Text style={styles.emptyTitle}>Enrollment Pending</Text>
           <Text style={styles.emptySubtext}>
             Your enrollment request is being reviewed by the gym admin. You'll
             be able to check-in once approved.
           </Text>
-
           <View style={styles.statusCard}>
             <View style={styles.statusRow}>
               <Text style={styles.statusLabel}>Status</Text>
@@ -280,7 +364,6 @@ const MyGym: React.FC = () => {
               </>
             )}
           </View>
-
           <TouchableOpacity
             style={styles.refreshButton}
             onPress={handleRefreshStatus}
@@ -293,7 +376,6 @@ const MyGym: React.FC = () => {
     );
   }
 
-  // NO GYM ENROLLED
   if (userData?.enrollmentStatus === "none" || !userData?.gymId) {
     return (
       <View style={styles.container}>
@@ -318,7 +400,6 @@ const MyGym: React.FC = () => {
     );
   }
 
-  // REJECTED
   if (userData?.enrollmentStatus === "rejected") {
     return (
       <View style={styles.container}>
@@ -343,7 +424,6 @@ const MyGym: React.FC = () => {
     );
   }
 
-  // APPROVED - ENROLLED GYM
   return (
     <View style={styles.container}>
       <StatusBar barStyle="light-content" backgroundColor="#0a0f1a" />
@@ -374,21 +454,49 @@ const MyGym: React.FC = () => {
         </View>
 
         <TouchableOpacity
-          style={[styles.checkInBtn, isCheckedIn && styles.checkOutBtn]}
-          onPress={handleCheckInOut}
+          style={[
+            styles.checkInBtn,
+            isCheckedIn && styles.checkOutBtn,
+            checkoutSuccess && styles.checkoutSuccessBtn,
+          ]}
+          onPress={isCheckedIn ? handleCheckOutPress : handleCheckInPress}
         >
           <Ionicons
             name={isCheckedIn ? "exit-outline" : "enter-outline"}
             size={40}
             color="#0a0f1a"
           />
-          <Text style={styles.checkInText}>
-            {isCheckedIn ? "Check Out" : "Check In"}
-          </Text>
-          <Text style={styles.checkInSubtext}>
+          <Text
+            style={[
+              styles.checkInText,
+              checkoutSuccess && styles.checkoutSuccessText,
+            ]}
+          >
             {isCheckedIn
-              ? `Session duration: ${formatTime(timerSeconds)}`
-              : "Tap to start your workout"}
+              ? checkOutConfirm
+                ? "Tap Again to Confirm"
+                : checkoutSuccess
+                  ? "Checked Out Successfully!"
+                  : "Check Out"
+              : checkInConfirm
+                ? "Tap Again to Confirm"
+                : "Check In"}
+          </Text>
+          <Text
+            style={[
+              styles.checkInSubtext,
+              checkoutSuccess && styles.checkoutSuccessSubtext,
+            ]}
+          >
+            {isCheckedIn
+              ? checkOutConfirm
+                ? "Confirm your checkout"
+                : checkoutSuccess
+                  ? "Great workout! See you next time! ✓"
+                  : `Session: ${formatTime(timerSeconds)}`
+              : checkInConfirm
+                ? "Confirm to start your workout"
+                : "Tap to start your workout"}
           </Text>
         </TouchableOpacity>
 
@@ -398,23 +506,153 @@ const MyGym: React.FC = () => {
             <Text style={styles.statNumber}>{streak}</Text>
             <Text style={styles.statLabel}>Day Streak</Text>
           </View>
-          <View style={styles.statCard}>
-            <Ionicons name="calendar-outline" size={28} color="#3b82f6" />
-            <Text style={styles.statNumber}>{sessionsThisMonth}</Text>
-            <Text style={styles.statLabel}>This Month</Text>
-          </View>
+
           <View style={styles.statCard}>
             <Ionicons name="time-outline" size={28} color="#a855f7" />
-            <Text style={styles.statNumber}>{formatTime(averageDuration)}</Text>
-            <Text style={styles.statLabel}>Avg Duration</Text>
+            <Text style={styles.statNumber}>
+              {formatTime(Math.floor(totalDuration))}
+            </Text>
+            <Text style={styles.statLabel}>Total Time</Text>
           </View>
         </View>
 
-        <TouchableOpacity style={styles.leaveButton} onPress={handleLeaveGym}>
-          <Ionicons name="exit-outline" size={20} color="#f87171" />
-          <Text style={styles.leaveButtonText}>Leave Gym</Text>
-        </TouchableOpacity>
+        <View style={styles.buttonsContainer}>
+          <TouchableOpacity
+            style={styles.timeSlotBtn}
+            onPress={() => router.push("/(member)/time-slot")}
+          >
+            <View style={styles.buttonInner}>
+              <Ionicons name="time-outline" size={22} color="#8b5cf6" />
+              <Text style={styles.timeSlotBtnText}>Time Slot</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={20} color="#64748b" />
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={styles.activityBtn}
+            onPress={() => router.push("/(member)/activity-log")}
+          >
+            <View style={styles.buttonInner}>
+              <Ionicons name="calendar-outline" size={22} color="#3b82f6" />
+              <Text style={styles.activityBtnText}>Activity Log</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={20} color="#64748b" />
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={styles.reportButton}
+            onPress={() => setShowReportModal(true)}
+          >
+            <View style={styles.buttonInner}>
+              <Ionicons name="flag-outline" size={22} color="#fbbf24" />
+              <Text style={styles.reportButtonText}>Report an Issue</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={20} color="#64748b" />
+          </TouchableOpacity>
+
+          <TouchableOpacity style={styles.leaveButton} onPress={handleLeaveGym}>
+            <View style={styles.buttonInner}>
+              <Ionicons name="exit-outline" size={22} color="#f87171" />
+              <Text style={styles.leaveButtonText}>Leave Gym</Text>
+            </View>
+          </TouchableOpacity>
+        </View>
       </ScrollView>
+
+      <Modal visible={showReportModal} transparent animationType="slide">
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Report an Issue</Text>
+              <TouchableOpacity onPress={() => setShowReportModal(false)}>
+                <Ionicons name="close" size={28} color="#e9eef7" />
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView>
+              <Text style={styles.modalSectionTitle}>
+                Select Issue Type
+                {selectedIssues.length > 0 &&
+                  ` (${selectedIssues.length} selected)`}
+              </Text>
+
+              {(
+                [
+                  "Equipment",
+                  "Cleanliness",
+                  "Staff",
+                  "Safety",
+                  "Other",
+                ] as IssueType[]
+              ).map((issue) => (
+                <TouchableOpacity
+                  key={issue}
+                  style={[
+                    styles.issueOption,
+                    selectedIssues.includes(issue) &&
+                      styles.issueOptionSelected,
+                  ]}
+                  onPress={() => handleIssueToggle(issue)}
+                >
+                  <Ionicons
+                    name={
+                      issue === "Equipment"
+                        ? "barbell"
+                        : issue === "Cleanliness"
+                          ? "water"
+                          : issue === "Staff"
+                            ? "people"
+                            : issue === "Safety"
+                              ? "warning"
+                              : "ellipsis-horizontal"
+                    }
+                    size={24}
+                    color={
+                      selectedIssues.includes(issue) ? "#4ade80" : "#64748b"
+                    }
+                  />
+                  <Text style={styles.issueOptionText}>{issue}</Text>
+                  {selectedIssues.includes(issue) && (
+                    <Ionicons
+                      name="checkmark-circle"
+                      size={24}
+                      color="#4ade80"
+                    />
+                  )}
+                </TouchableOpacity>
+              ))}
+
+              <Text style={styles.modalSectionTitle}>Description</Text>
+              <TextInput
+                style={styles.descriptionInput}
+                placeholder="Describe the issue(s) in detail..."
+                placeholderTextColor="#64748b"
+                value={reportDescription}
+                onChangeText={setReportDescription}
+                multiline
+                numberOfLines={4}
+                textAlignVertical="top"
+              />
+            </ScrollView>
+
+            <TouchableOpacity
+              style={[
+                styles.submitButton,
+                (selectedIssues.length === 0 || submittingReport) &&
+                  styles.submitButtonDisabled,
+              ]}
+              onPress={handleSubmitReport}
+              disabled={selectedIssues.length === 0 || submittingReport}
+            >
+              {submittingReport ? (
+                <ActivityIndicator color="#0a0f1a" />
+              ) : (
+                <Text style={styles.submitButtonText}>Submit Report</Text>
+              )}
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 };
@@ -519,7 +757,7 @@ const styles = StyleSheet.create({
   scrollContent: {
     paddingHorizontal: width * 0.05,
     paddingTop: height * 0.02,
-    paddingBottom: height * 0.02,
+    paddingBottom: height * 0.05,
   },
   accentCircleOne: {
     position: "absolute",
@@ -577,16 +815,27 @@ const styles = StyleSheet.create({
     elevation: 10,
   },
   checkOutBtn: { backgroundColor: "#f97316", shadowColor: "#f97316" },
-  checkInText: { fontSize: 24, fontWeight: "800", color: "#0a0f1a" },
+  checkoutSuccessBtn: { backgroundColor: "#10b981", shadowColor: "#10b981" },
+  checkInText: {
+    fontSize: 24,
+    fontWeight: "800",
+    color: "#0a0f1a",
+    marginTop: 8,
+    textAlign: "center",
+  },
+  checkoutSuccessText: { color: "#0a0f1a" },
   checkInSubtext: {
     fontSize: 14,
     color: "rgba(10, 15, 26, 0.7)",
     marginTop: 4,
+    textAlign: "center",
   },
+  checkoutSuccessSubtext: { color: "rgba(10, 15, 26, 0.8)", fontWeight: "600" },
   statsGrid: {
     flexDirection: "row",
     justifyContent: "space-between",
     marginBottom: height * 0.025,
+    gap: 10,
   },
   statCard: {
     flex: 1,
@@ -594,7 +843,6 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     padding: 16,
     alignItems: "center",
-    marginHorizontal: 5,
     borderWidth: 1,
     borderColor: "rgba(255,255,255,0.06)",
   },
@@ -605,16 +853,140 @@ const styles = StyleSheet.create({
     marginTop: 8,
   },
   statLabel: { fontSize: 11, color: "#64748b", marginTop: 4 },
+  buttonsContainer: { gap: 12, marginBottom: 30 },
+  Container: { gap: 12, marginBottom: 30 },
+  buttonInner: { flexDirection: "row", alignItems: "center", gap: 10 },
+  timeSlotBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    backgroundColor: "rgba(139, 92, 246, 0.1)",
+    borderRadius: 14,
+    paddingHorizontal: 16,
+    paddingVertical: 16,
+    borderWidth: 1,
+    borderColor: "rgba(139, 92, 246, 0.2)",
+  },
+  timeSlotBtnText: {
+    fontSize: 16,
+    fontWeight: "600",
+    color: "#8b5cf6",
+    flex: 1,
+  },
+  activityBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    backgroundColor: "rgba(59, 130, 246, 0.1)",
+    borderRadius: 14,
+    paddingHorizontal: 16,
+    paddingVertical: 16,
+    borderWidth: 1,
+    borderColor: "rgba(59, 130, 246, 0.2)",
+  },
+  activityBtnText: {
+    fontSize: 16,
+    fontWeight: "600",
+    color: "#3b82f6",
+    flex: 1,
+  },
+  reportButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    backgroundColor: "rgba(251, 191, 36, 0.1)",
+    borderRadius: 14,
+    paddingHorizontal: 16,
+    paddingVertical: 16,
+    borderWidth: 1,
+    borderColor: "rgba(251, 191, 36, 0.2)",
+  },
+  reportButtonText: {
+    fontSize: 16,
+    fontWeight: "600",
+    color: "#fbbf24",
+    flex: 1,
+  },
   leaveButton: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
-    gap: 10,
     backgroundColor: "rgba(248, 113, 113, 0.1)",
-    paddingVertical: 16,
     borderRadius: 14,
+    paddingVertical: 16,
     borderWidth: 1,
     borderColor: "rgba(248, 113, 113, 0.2)",
   },
   leaveButtonText: { fontSize: 16, fontWeight: "600", color: "#f87171" },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0, 0, 0, 0.7)",
+    justifyContent: "flex-end",
+  },
+  modalContent: {
+    backgroundColor: "#0a0f1a",
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    maxHeight: height * 0.85,
+    paddingBottom: Platform.OS === "ios" ? 34 : 20,
+  },
+  modalHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    paddingHorizontal: 20,
+    paddingVertical: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: "rgba(255,255,255,0.06)",
+  },
+  modalTitle: { fontSize: 20, fontWeight: "700", color: "#e9eef7" },
+  modalSectionTitle: {
+    fontSize: 16,
+    fontWeight: "600",
+    color: "#e9eef7",
+    marginTop: 20,
+    marginBottom: 12,
+    marginHorizontal: 20,
+  },
+  issueOption: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    backgroundColor: "rgba(15, 23, 42, 0.8)",
+    marginHorizontal: 20,
+    marginBottom: 10,
+    paddingHorizontal: 16,
+    paddingVertical: 16,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.06)",
+  },
+  issueOptionSelected: {
+    borderColor: "#4ade80",
+    backgroundColor: "rgba(74, 222, 128, 0.05)",
+  },
+  issueOptionText: { flex: 1, fontSize: 16, color: "#e9eef7", marginLeft: 12 },
+  descriptionInput: {
+    backgroundColor: "rgba(15, 23, 42, 0.8)",
+    marginHorizontal: 20,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.06)",
+    color: "#e9eef7",
+    fontSize: 16,
+    minHeight: 120,
+    marginBottom: 20,
+  },
+  submitButton: {
+    backgroundColor: "#4ade80",
+    marginHorizontal: 20,
+    paddingVertical: 16,
+    borderRadius: 14,
+    alignItems: "center",
+    marginTop: 10,
+  },
+  submitButtonDisabled: { backgroundColor: "#374151", opacity: 0.5 },
+  submitButtonText: { fontSize: 16, fontWeight: "700", color: "#0a0f1a" },
 });

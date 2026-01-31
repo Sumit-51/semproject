@@ -54,6 +54,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           enrolledAt: data.enrolledAt?.toDate() || null,
           createdAt: data.createdAt?.toDate() || new Date(),
           planDuration,
+          timeSlot: data.timeSlot || null, // ADDED: Time slot field
         });
       } else {
         // Create new user document
@@ -68,6 +69,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           enrolledAt: null,
           createdAt: serverTimestamp(),
           planDuration: 1, // default
+          timeSlot: null, // ADDED: Default no time slot
         };
 
         await setDoc(userDocRef, newUserData);
@@ -84,6 +86,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           enrolledAt: null,
           createdAt: new Date(),
           planDuration: 1,
+          timeSlot: null, // ADDED: Default no time slot
         });
       }
     } catch (error) {

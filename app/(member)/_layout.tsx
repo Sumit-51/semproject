@@ -22,7 +22,7 @@ const MemberLayout: React.FC = () => {
   return (
     <Tabs
       screenOptions={{
-        headerShown: true,
+        headerShown: false,
         tabBarStyle: {
           backgroundColor: '#0f172a',
           borderTopColor: 'rgba(255,255,255,0.1)',
@@ -87,7 +87,18 @@ const MemberLayout: React.FC = () => {
           href: null,
         }}
       />
-      
+      <Tabs.Screen
+        name="activity-log"
+        options={{
+          href: null,
+        }}
+      />
+      <Tabs.Screen
+        name="time-slot"
+        options={{
+          href: null,
+        }}
+      />
     </Tabs>
   );
 };
