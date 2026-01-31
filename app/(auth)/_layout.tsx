@@ -3,7 +3,7 @@ import React from 'react';
 
 const AuthLayout: React.FC = () => {
   return (
-    <Stack screenOptions={{ headerShown: false }}>
+    <Stack screenOptions={{ headerShown: true }}>
       <Stack.Screen name="gym-selection" />
       <Stack.Screen name="payment-options" />
       <Stack.Screen name="pending-approval" />

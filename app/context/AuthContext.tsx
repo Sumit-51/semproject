@@ -35,10 +35,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       if (userDoc.exists()) {
         const data = userDoc.data();
 
-        // Set dynamic planDuration based on paymentMethod
-        let planDuration = 1; // default 1 month
-        if (data.paymentMethod === 'Quarterly') planDuration = 3;
-        else if (data.paymentMethod === '6-Month') planDuration = 6;
+        // Use planDuration from Firestore if it exists, otherwise derive from paymentMethod
+        let planDuration = data.planDuration ?? 1;
+        if (!data.planDuration) {
+          if (data.paymentMethod === 'Quarterly') planDuration = 3;
+          else if (data.paymentMethod === '6-Month') planDuration = 6;
+        }
 
         setUserData({
           uid: firebaseUser.uid,

@@ -57,3 +57,16 @@ export interface Enrollment {
   verifiedAt: Date | null;
   verifiedBy: string | null;
 }
+export type PlanChangeStatus = 'pending' | 'approved' | 'rejected';
+
+export interface PlanChangeRequest {
+  id: string;
+  userId: string;
+  gymId: string | null;
+  currentDuration: number;
+  requestedDuration: number;
+  status: PlanChangeStatus;
+  createdAt: Date;
+  reviewedAt: Date | null;
+  reviewedBy: string | null;
+}

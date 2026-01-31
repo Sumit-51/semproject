@@ -54,23 +54,52 @@ const GymDetails: React.FC = () => {
   };
 
   const handleJoinNow = () => {
-    // Check if already enrolled
-    if (userData?.enrollmentStatus === 'approved') {
-      Alert.alert(
-        'Already Enrolled',
-        `You are already a member of a gym. Your current membership is non-refundable.\n\nIf you want to join ${gym?.name}, you must first leave your current gym from the "My Gym" tab.`,
-        [{ text: 'OK' }]
-      );
-      return;
+    // Check if trying to join a different gym while already enrolled
+    if (userData?.gymId && userData?.gymId !== id) {
+      if (userData?.enrollmentStatus === 'approved') {
+        Alert.alert(
+          'Already Enrolled',
+          `You are already a member of another gym. Your current membership is non-refundable.\n\nTo join ${gym?.name}, you must first leave your current gym from the "My Gym" tab.`,
+          [
+            { text: 'Cancel', style: 'cancel' },
+            { text: 'Go to My Gym', onPress: () => router.push('/(member)/mygym') }
+          ]
+        );
+        return;
+      }
+
+      if (userData?.enrollmentStatus === 'pending') {
+        Alert.alert(
+          'Pending Approval',
+          'You already have a pending enrollment request at another gym. Please wait for admin approval or cancel that request first.',
+          [{ text: 'OK' }]
+        );
+        return;
+      }
     }
 
-    if (userData?.enrollmentStatus === 'pending') {
-      Alert.alert(
-        'Pending Approval',
-        'You already have a pending enrollment request. Please wait for admin approval.',
-        [{ text: 'OK' }]
-      );
-      return;
+    // If already enrolled/pending at THIS gym
+    if (userData?.gymId === id) {
+      if (userData?.enrollmentStatus === 'approved') {
+        Alert.alert(
+          'Already a Member',
+          `You are already a member of ${gym?.name}!`,
+          [
+            { text: 'OK', style: 'cancel' },
+            { text: 'Go to My Gym', onPress: () => router.push('/(member)/mygym') }
+          ]
+        );
+        return;
+      }
+
+      if (userData?.enrollmentStatus === 'pending') {
+        Alert.alert(
+          'Request Pending',
+          `Your enrollment request for ${gym?.name} is pending approval. Please wait for the gym admin to approve your request.`,
+          [{ text: 'OK' }]
+        );
+        return;
+      }
     }
 
     // Show enrollment modal
@@ -113,7 +142,7 @@ const GymDetails: React.FC = () => {
               Alert.alert(
                 'Success',
                 'Enrollment request submitted! Please wait for gym admin approval.',
-                [{ text: 'OK', onPress: () => router.replace('/pending-approval') }]
+                [{ text: 'OK', onPress: () => router.replace('/(member)/mygym') }]
               );
             } catch (error) {
               console.error('Enrollment error:', error);
@@ -125,6 +154,30 @@ const GymDetails: React.FC = () => {
         },
       ]
     );
+  };
+
+  // Check if user can join this gym
+  const canJoinGym = () => {
+    // Already enrolled in THIS gym
+    if (userData?.gymId === id && userData?.enrollmentStatus !== 'rejected') {
+      return false;
+    }
+    // Enrolled in ANOTHER gym
+    if (userData?.gymId && userData?.gymId !== id && userData?.enrollmentStatus !== 'none') {
+      return false;
+    }
+    return true;
+  };
+
+  const getJoinButtonText = () => {
+    if (userData?.gymId === id) {
+      if (userData?.enrollmentStatus === 'approved') return 'Already a Member';
+      if (userData?.enrollmentStatus === 'pending') return 'Request Pending';
+    }
+    if (userData?.gymId && userData?.gymId !== id && userData?.enrollmentStatus !== 'none') {
+      return 'Already Enrolled Elsewhere';
+    }
+    return 'Join Now';
   };
 
   if (loading) {
@@ -177,6 +230,26 @@ const GymDetails: React.FC = () => {
             </View>
           )}
         </View>
+
+        {/* Enrollment Status Banner */}
+        {userData?.gymId === id && userData?.enrollmentStatus === 'approved' && (
+          <View style={styles.statusBanner}>
+            <Ionicons name="checkmark-circle" size={24} color="#4ade80" />
+            <Text style={styles.statusBannerText}>You are a member of this gym</Text>
+          </View>
+        )}
+        {userData?.gymId === id && userData?.enrollmentStatus === 'pending' && (
+          <View style={[styles.statusBanner, styles.statusBannerPending]}>
+            <Ionicons name="time" size={24} color="#fbbf24" />
+            <Text style={[styles.statusBannerText, { color: '#fbbf24' }]}>Enrollment pending approval</Text>
+          </View>
+        )}
+        {userData?.gymId && userData?.gymId !== id && userData?.enrollmentStatus !== 'none' && (
+          <View style={[styles.statusBanner, styles.statusBannerWarning]}>
+            <Ionicons name="information-circle" size={24} color="#f97316" />
+            <Text style={[styles.statusBannerText, { color: '#f97316' }]}>You're enrolled at another gym</Text>
+          </View>
+        )}
 
         {/* Contact Info */}
         <View style={styles.section}>
@@ -268,9 +341,13 @@ const GymDetails: React.FC = () => {
           <Text style={styles.footerLabel}>Starting from</Text>
           <Text style={styles.footerPrice}>₹{gym.monthlyFee}/month</Text>
         </View>
-        <TouchableOpacity style={styles.joinButton} onPress={handleJoinNow}>
-          <Text style={styles.joinButtonText}>Join Now</Text>
-          <Ionicons name="arrow-forward" size={20} color="#0a0f1a" />
+        <TouchableOpacity 
+          style={[styles.joinButton, !canJoinGym() && styles.joinButtonDisabled]} 
+          onPress={handleJoinNow}
+          disabled={!canJoinGym()}
+        >
+          <Text style={styles.joinButtonText}>{getJoinButtonText()}</Text>
+          {canJoinGym() && <Ionicons name="arrow-forward" size={20} color="#0a0f1a" />}
         </TouchableOpacity>
       </View>
 
@@ -402,6 +479,10 @@ const styles = StyleSheet.create({
   ratingContainer: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   ratingText: { fontSize: 16, fontWeight: '700', color: '#fbbf24' },
   reviewsText: { fontSize: 14, color: '#64748b' },
+  statusBanner: { backgroundColor: 'rgba(74, 222, 128, 0.15)', borderRadius: 12, padding: 16, marginBottom: 20, flexDirection: 'row', alignItems: 'center', gap: 12, borderWidth: 1, borderColor: 'rgba(74, 222, 128, 0.3)' },
+  statusBannerPending: { backgroundColor: 'rgba(251, 191, 36, 0.15)', borderColor: 'rgba(251, 191, 36, 0.3)' },
+  statusBannerWarning: { backgroundColor: 'rgba(249, 115, 22, 0.15)', borderColor: 'rgba(249, 115, 22, 0.3)' },
+  statusBannerText: { fontSize: 15, fontWeight: '600', color: '#4ade80', flex: 1 },
   section: { marginBottom: 24 },
   sectionTitle: { fontSize: 20, fontWeight: '700', color: '#e9eef7', marginBottom: 12 },
   infoCard: { backgroundColor: 'rgba(15, 23, 42, 0.8)', borderRadius: 16, padding: 16, borderWidth: 1, borderColor: 'rgba(255,255,255,0.06)', gap: 12 },
@@ -425,6 +506,7 @@ const styles = StyleSheet.create({
   footerLabel: { fontSize: 12, color: '#64748b' },
   footerPrice: { fontSize: 20, fontWeight: '800', color: '#4ade80' },
   joinButton: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: '#4ade80', paddingHorizontal: 24, paddingVertical: 14, borderRadius: 14 },
+  joinButtonDisabled: { backgroundColor: '#64748b', opacity: 0.6 },
   joinButtonText: { fontSize: 16, fontWeight: '700', color: '#0a0f1a' },
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.7)', justifyContent: 'flex-end' },
   modalContent: { backgroundColor: '#0f172a', borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 20, maxHeight: height * 0.85 },

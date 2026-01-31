@@ -58,18 +58,34 @@ const MemberHome: React.FC = () => {
   };
 
   const renderGymCard = ({ item }: { item: Gym }) => {
+    const isEnrolled = userData?.gymId === item.id;
+    const isPending = isEnrolled && userData?.enrollmentStatus === 'pending';
+    const isApproved = isEnrolled && userData?.enrollmentStatus === 'approved';
+
     return (
       <TouchableOpacity
         activeOpacity={0.85}
         onPress={() => router.push(`/gymdetails/${item.id}`)}
       >
-        <View style={styles.gymCard}>
+        <View style={[styles.gymCard, isEnrolled && styles.gymCardEnrolled]}>
           <View style={styles.gymIconContainer}>
             <Ionicons name="barbell" size={28} color="#4ade80" />
           </View>
 
           <View style={styles.gymInfo}>
-            <Text style={styles.gymName}>{item.name}</Text>
+            <View style={styles.gymNameRow}>
+              <Text style={styles.gymName}>{item.name}</Text>
+              {isPending && (
+                <View style={styles.pendingBadge}>
+                  <Text style={styles.badgeText}>Pending</Text>
+                </View>
+              )}
+              {isApproved && (
+                <View style={styles.enrolledBadge}>
+                  <Text style={styles.badgeText}>Enrolled</Text>
+                </View>
+              )}
+            </View>
 
             <View style={styles.gymDetailRow}>
               <Ionicons name="location-outline" size={14} color="#64748b" />
@@ -223,6 +239,10 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: 'rgba(255, 255, 255, 0.06)',
   },
+  gymCardEnrolled: {
+    borderColor: '#4ade80',
+    borderWidth: 1.5,
+  },
   gymIconContainer: {
     width: 56,
     height: 56,
@@ -235,11 +255,34 @@ const styles = StyleSheet.create({
     flex: 1,
     marginLeft: 14,
   },
+  gymNameRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 6,
+    flexWrap: 'wrap',
+  },
   gymName: {
     fontSize: 17,
     fontWeight: '700',
     color: '#e9eef7',
-    marginBottom: 6,
+    marginRight: 8,
+  },
+  pendingBadge: {
+    backgroundColor: 'rgba(251, 191, 36, 0.15)',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 12,
+  },
+  enrolledBadge: {
+    backgroundColor: 'rgba(74, 222, 128, 0.15)',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 12,
+  },
+  badgeText: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#4ade80',
   },
   gymDetailRow: {
     flexDirection: 'row',
