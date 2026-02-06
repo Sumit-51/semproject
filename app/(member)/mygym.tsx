@@ -63,14 +63,10 @@ const MyGym: React.FC = () => {
     "Morning" | "Evening" | "Night"
   >("Morning");
 
-  // New state for plan details modal
   const [showPlanDetailsModal, setShowPlanDetailsModal] =
     useState<boolean>(false);
 
-  // Track if we've loaded initial data
   const [initialLoadDone, setInitialLoadDone] = useState<boolean>(false);
-
-  // Check-in start time
   const [checkInStartTime, setCheckInStartTime] = useState<Date | null>(null);
 
   useEffect(() => {
@@ -81,7 +77,6 @@ const MyGym: React.FC = () => {
   }, [userData]);
 
   useEffect(() => {
-    // Determine current time slot
     const now = new Date();
     const currentHour = now.getHours();
     if (currentHour >= 6 && currentHour < 16) {
@@ -129,7 +124,6 @@ const MyGym: React.FC = () => {
 
       setActiveCheckInsCount(querySnapshot.size);
 
-      // Check if current user is checked in
       if (userData?.uid) {
         const userCheckInDoc = querySnapshot.docs.find(
           (doc) => doc.id === userData.uid,
@@ -138,22 +132,28 @@ const MyGym: React.FC = () => {
         if (userCheckInDoc) {
           setIsCheckedIn(true);
           const checkInData = userCheckInDoc.data();
-          const checkInTime = checkInData.checkInTime?.toDate() || new Date();
-          setCheckInStartTime(checkInTime);
+          const checkInTime = checkInData.checkInTime?.toDate();
 
-          // Calculate elapsed time since check-in
-          const now = new Date();
-          const elapsedSeconds = Math.floor(
-            (now.getTime() - checkInTime.getTime()) / 1000,
-          );
-          setTimerSeconds(elapsedSeconds);
+          if (checkInTime) {
+            setCheckInStartTime(checkInTime);
 
-          // Start timer if not already running
-          if (!timerRef.current) {
-            timerRef.current = setInterval(
-              () => setTimerSeconds((prev) => prev + 1),
-              1000,
+            const now = new Date();
+            const elapsedSeconds = Math.max(
+              0,
+              Math.floor((now.getTime() - checkInTime.getTime()) / 1000),
             );
+
+            setTimerSeconds(elapsedSeconds);
+
+            if (!timerRef.current) {
+              timerRef.current = setInterval(
+                () =>
+                  setTimerSeconds((prev) => {
+                    return Math.max(0, prev + 1);
+                  }),
+                1000,
+              );
+            }
           }
         } else {
           setIsCheckedIn(false);
@@ -167,7 +167,6 @@ const MyGym: React.FC = () => {
     }
   };
 
-  // Load user stats from Firebase
   const loadUserStats = async () => {
     try {
       if (!userData?.uid) return;
@@ -186,7 +185,6 @@ const MyGym: React.FC = () => {
     }
   };
 
-  // Update user stats in Firebase
   const updateUserStatsInFirebase = async (
     streakValue: number,
     totalDurationValue: number,
@@ -204,12 +202,11 @@ const MyGym: React.FC = () => {
     }
   };
 
-  // Calculate streak based on check-in history
+  // FIXED STREAK LOGIC - Handles midnight crossovers correctly
   const calculateStreak = async (): Promise<number> => {
-    if (!userData?.uid) return 0;
+    if (!userData?.uid) return 1;
 
     try {
-      // Get user's check-in history
       const checkInHistoryRef = collection(db, "checkInHistory");
       const userCheckInsQuery = query(
         checkInHistoryRef,
@@ -217,50 +214,130 @@ const MyGym: React.FC = () => {
       );
       const querySnapshot = await getDocs(userCheckInsQuery);
 
-      if (querySnapshot.empty) return 1; // First check-in
+      if (querySnapshot.empty) return 1;
 
-      // Get unique dates from check-ins
+      // Get ALL unique check-in dates (handles both date field and timestamps)
       const checkInDates = new Set<string>();
+
       querySnapshot.forEach((doc) => {
         const data = doc.data();
-        if (data.date) {
+
+        // Priority 1: Use the date field if it exists
+        if (data.date && typeof data.date === "string") {
           checkInDates.add(data.date);
+        }
+        // Priority 2: Extract date from checkOutTime
+        else if (data.checkOutTime) {
+          try {
+            const checkOutDate = data.checkOutTime.toDate();
+            // Convert to LOCAL date (not UTC)
+            const localDate = new Date(
+              checkOutDate.getFullYear(),
+              checkOutDate.getMonth(),
+              checkOutDate.getDate(),
+            );
+            const dateStr = `${localDate.getFullYear()}-${String(localDate.getMonth() + 1).padStart(2, "0")}-${String(localDate.getDate()).padStart(2, "0")}`;
+            checkInDates.add(dateStr);
+          } catch (e) {
+            console.warn("Could not parse checkOutTime:", e);
+          }
+        }
+        // Priority 3: Extract date from checkInTime
+        else if (data.checkInTime) {
+          try {
+            const checkInDate = data.checkInTime.toDate();
+            const localDate = new Date(
+              checkInDate.getFullYear(),
+              checkInDate.getMonth(),
+              checkInDate.getDate(),
+            );
+            const dateStr = `${localDate.getFullYear()}-${String(localDate.getMonth() + 1).padStart(2, "0")}-${String(localDate.getDate()).padStart(2, "0")}`;
+            checkInDates.add(dateStr);
+          } catch (e) {
+            console.warn("Could not parse checkInTime:", e);
+          }
         }
       });
 
-      // Sort dates in descending order
+      // Convert to sorted array (newest first)
       const sortedDates = Array.from(checkInDates).sort().reverse();
+      console.log("📅 All check-in dates:", sortedDates);
 
-      // Calculate streak
-      let streakCount = 0;
-      const today = new Date().toISOString().split("T")[0];
+      // Get TODAY'S date in LOCAL timezone
+      const now = new Date();
+      const todayLocal = new Date(
+        now.getFullYear(),
+        now.getMonth(),
+        now.getDate(),
+      );
+      const todayStr = `${todayLocal.getFullYear()}-${String(todayLocal.getMonth() + 1).padStart(2, "0")}-${String(todayLocal.getDate()).padStart(2, "0")}`;
 
-      // Check if already checked in today
-      const alreadyCheckedInToday = sortedDates[0] === today;
-      let currentDate = alreadyCheckedInToday ? new Date(today) : new Date();
+      // Get YESTERDAY'S date
+      const yesterday = new Date(todayLocal);
+      yesterday.setDate(yesterday.getDate() - 1);
+      const yesterdayStr = `${yesterday.getFullYear()}-${String(yesterday.getMonth() + 1).padStart(2, "0")}-${String(yesterday.getDate()).padStart(2, "0")}`;
 
-      // Move back one day if already checked in today
-      if (alreadyCheckedInToday) {
-        streakCount++;
-        currentDate.setDate(currentDate.getDate() - 1);
-      }
+      console.log("🗓️ Today:", todayStr, "| Yesterday:", yesterdayStr);
 
-      // Check consecutive days
-      while (true) {
-        const dateString = currentDate.toISOString().split("T")[0];
+      // Check if user already checked in today
+      const checkedInToday = sortedDates.includes(todayStr);
+      const checkedInYesterday = sortedDates.includes(yesterdayStr);
 
-        if (sortedDates.includes(dateString)) {
-          streakCount++;
-          currentDate.setDate(currentDate.getDate() - 1);
-        } else {
-          break;
+      console.log("✅ Checked in today?", checkedInToday);
+      console.log("✅ Checked in yesterday?", checkedInYesterday);
+
+      // If already checked in today, calculate current streak
+      if (checkedInToday) {
+        let streakCount = 0;
+        let currentDate = new Date(todayLocal);
+
+        // Count consecutive days backwards from today
+        while (true) {
+          const dateString = `${currentDate.getFullYear()}-${String(currentDate.getMonth() + 1).padStart(2, "0")}-${String(currentDate.getDate()).padStart(2, "0")}`;
+          if (sortedDates.includes(dateString)) {
+            streakCount++;
+            currentDate.setDate(currentDate.getDate() - 1);
+          } else {
+            break;
+          }
         }
+
+        console.log(
+          "🔥 Current streak (already checked in today):",
+          streakCount,
+        );
+        return Math.max(streakCount, 1);
       }
 
-      return streakCount > 0 ? streakCount : 1;
+      // If checking in for FIRST TIME today and checked in yesterday
+      if (checkedInYesterday) {
+        // Calculate streak from yesterday backwards
+        let streakCount = 0;
+        let currentDate = new Date(yesterday);
+
+        while (true) {
+          const dateString = `${currentDate.getFullYear()}-${String(currentDate.getMonth() + 1).padStart(2, "0")}-${String(currentDate.getDate()).padStart(2, "0")}`;
+          if (sortedDates.includes(dateString)) {
+            streakCount++;
+            currentDate.setDate(currentDate.getDate() - 1);
+          } else {
+            break;
+          }
+        }
+
+        // Add 1 for today's new check-in
+        const newStreak = streakCount + 1;
+        console.log("🔥 New streak (checked in yesterday):", newStreak);
+        return newStreak;
+      }
+
+      // No check-in yesterday, streak starts at 1
+      console.log("🔥 New streak (no check-in yesterday):", 1);
+      return 1;
     } catch (error) {
-      console.error("Error calculating streak:", error);
-      return streak + 1; // Fallback: increment existing streak
+      console.error("❌ Error calculating streak:", error);
+      // Fallback: use existing streak + 1
+      return Math.max(streak + 1, 1);
     }
   };
 
@@ -291,9 +368,9 @@ const MyGym: React.FC = () => {
     setCheckoutSuccess(false);
     setCheckInStartTime(now);
 
-    // Calculate streak first
-    const newStreak = await calculateStreak();
-    setStreak(newStreak);
+    // DON'T calculate streak here - the record doesn't exist yet!
+    // Streak will be calculated during checkout
+    console.log("✅ Check-in started, current streak:", streak);
 
     // Start timer
     if (timerRef.current) {
@@ -301,12 +378,9 @@ const MyGym: React.FC = () => {
     }
     setTimerSeconds(0);
     timerRef.current = setInterval(
-      () => setTimerSeconds((prev) => prev + 1),
+      () => setTimerSeconds((prev) => Math.max(0, prev + 1)),
       1000,
     );
-
-    // Update Firebase with new streak
-    updateUserStatsInFirebase(newStreak, totalDuration);
 
     // Track active check-in in Firestore
     if (userData?.uid && userData?.gymId) {
@@ -357,17 +431,24 @@ const MyGym: React.FC = () => {
 
     const duration = timerSeconds;
     const now = new Date();
-    const dateKey = now.toISOString().split("T")[0];
+
+    // CRITICAL: Get LOCAL date (not UTC) for correct date tracking
+    const todayLocal = new Date(
+      now.getFullYear(),
+      now.getMonth(),
+      now.getDate(),
+    );
+    const dateKey = `${todayLocal.getFullYear()}-${String(todayLocal.getMonth() + 1).padStart(2, "0")}-${String(todayLocal.getDate()).padStart(2, "0")}`;
+
+    console.log("🕒 Check-out time:", now.toLocaleString());
+    console.log("📅 Check-out date key (LOCAL):", dateKey);
 
     const newTotalDuration = totalDuration + duration;
     setTotalDuration(newTotalDuration);
     setIsCheckedIn(false);
     setCheckoutSuccess(true);
 
-    // Update Firebase with new total duration and streak
-    updateUserStatsInFirebase(streak, newTotalDuration);
-
-    // Save to Firestore for permanent records
+    // Save to Firestore FIRST, then calculate streak
     if (userData?.uid && userData?.gymId && checkInStartTime) {
       try {
         const currentHour = now.getHours();
@@ -381,7 +462,7 @@ const MyGym: React.FC = () => {
           currentTimeSlot = "Night";
         }
 
-        // Save PERMANENT record
+        // Save PERMANENT record with LOCAL date
         await addDoc(collection(db, "checkInHistory"), {
           userId: userData.uid,
           userName: userData.displayName,
@@ -389,13 +470,20 @@ const MyGym: React.FC = () => {
           gymId: userData.gymId,
           gymName: gym?.name,
           timeSlot: currentTimeSlot,
-          date: dateKey,
+          date: dateKey, // LOCAL DATE - This is what streak calculation uses
           checkInTime: serverTimestamp(),
           checkOutTime: serverTimestamp(),
           duration: duration,
-          streak: streak,
           createdAt: serverTimestamp(),
         });
+
+        // NOW calculate streak AFTER the record is saved
+        const newStreak = await calculateStreak();
+        console.log("🔥 Calculated new streak after checkout:", newStreak);
+        setStreak(newStreak);
+
+        // Update Firebase with new stats
+        await updateUserStatsInFirebase(newStreak, newTotalDuration);
 
         // Remove from ACTIVE check-ins
         await deleteDoc(doc(db, "activeCheckIns", userData.uid));
@@ -412,7 +500,7 @@ const MyGym: React.FC = () => {
         setIsCheckedIn(true);
         if (checkInStartTime) {
           timerRef.current = setInterval(
-            () => setTimerSeconds((prev) => prev + 1),
+            () => setTimerSeconds((prev) => Math.max(0, prev + 1)),
             1000,
           );
         }
@@ -547,7 +635,6 @@ const MyGym: React.FC = () => {
     return "Good Evening";
   };
 
-  // Helper functions for plan details
   const getPlanName = (paymentMethod: string | undefined) => {
     if (!paymentMethod) return "Not selected";
     switch (paymentMethod) {
@@ -610,7 +697,6 @@ const MyGym: React.FC = () => {
     Alert.alert("Copied!", "Details copied to clipboard");
   };
 
-  // Plan Details Modal Component
   const renderPlanDetailsModal = () => (
     <Modal
       visible={showPlanDetailsModal}
@@ -620,7 +706,6 @@ const MyGym: React.FC = () => {
     >
       <View style={styles.planModalOverlay}>
         <View style={styles.planModalContent}>
-          {/* Modal Header */}
           <View style={styles.planModalHeader}>
             <Text style={styles.planModalTitle}>Your Enrollment Details</Text>
             <TouchableOpacity
@@ -632,7 +717,6 @@ const MyGym: React.FC = () => {
           </View>
 
           <ScrollView style={styles.planModalScroll}>
-            {/* Status Section */}
             <View style={styles.planSection}>
               <View style={styles.planSectionHeader}>
                 <Ionicons name="time-outline" size={20} color="#fbbf24" />
@@ -650,7 +734,6 @@ const MyGym: React.FC = () => {
               </View>
             </View>
 
-            {/* Gym Information */}
             {gym && (
               <View style={styles.planSection}>
                 <View style={styles.planSectionHeader}>
@@ -676,14 +759,12 @@ const MyGym: React.FC = () => {
               </View>
             )}
 
-            {/* Plan Details */}
             <View style={styles.planSection}>
               <View style={styles.planSectionHeader}>
                 <Ionicons name="card-outline" size={20} color="#3b82f6" />
                 <Text style={styles.planSectionTitle}>Plan Details</Text>
               </View>
               <View style={styles.detailCard}>
-                {/* Plan Type */}
                 <View style={styles.detailRowWithIcon}>
                   <View style={styles.iconCircleSmall}>
                     <Ionicons
@@ -702,7 +783,6 @@ const MyGym: React.FC = () => {
                   </View>
                 </View>
 
-                {/* Duration */}
                 {userData?.planDuration && (
                   <View style={styles.detailRowWithIcon}>
                     <View style={styles.iconCircleSmall}>
@@ -718,7 +798,6 @@ const MyGym: React.FC = () => {
                   </View>
                 )}
 
-                {/* Time Slot */}
                 {userData?.timeSlot && (
                   <View style={styles.detailRowWithIcon}>
                     <View
@@ -745,7 +824,6 @@ const MyGym: React.FC = () => {
                   </View>
                 )}
 
-                {/* Payment Method */}
                 {userData?.paymentMethod && (
                   <View style={styles.detailRowWithIcon}>
                     <View style={styles.iconCircleSmall}>
@@ -766,7 +844,6 @@ const MyGym: React.FC = () => {
                   </View>
                 )}
 
-                {/* Enrollment Date */}
                 {userData?.enrolledAt && (
                   <View style={styles.detailRowWithIcon}>
                     <View style={styles.iconCircleSmall}>
@@ -792,7 +869,6 @@ const MyGym: React.FC = () => {
               </View>
             </View>
 
-            {/* Transaction Details */}
             {userData?.transactionId && (
               <View style={styles.planSection}>
                 <View style={styles.planSectionHeader}>
@@ -820,7 +896,6 @@ const MyGym: React.FC = () => {
               </View>
             )}
 
-            {/* Instructions */}
             <View style={styles.planSection}>
               <View style={styles.planSectionHeader}>
                 <Ionicons
@@ -866,7 +941,6 @@ const MyGym: React.FC = () => {
               </View>
             </View>
 
-            {/* Contact Support */}
             <View style={styles.contactCard}>
               <Ionicons name="help-circle-outline" size={24} color="#3b82f6" />
               <View style={styles.contactContent}>
@@ -879,7 +953,6 @@ const MyGym: React.FC = () => {
             </View>
           </ScrollView>
 
-          {/* Modal Footer */}
           <View style={styles.planModalFooter}>
             <TouchableOpacity
               style={styles.closePlanModalButton}
@@ -931,7 +1004,6 @@ const MyGym: React.FC = () => {
             be able to check-in once approved.
           </Text>
 
-          {/* View Plan Button */}
           <TouchableOpacity
             style={styles.viewPlanButton}
             onPress={() => setShowPlanDetailsModal(true)}
@@ -950,7 +1022,6 @@ const MyGym: React.FC = () => {
               </View>
             </View>
 
-            {/* Quick Summary */}
             {userData?.paymentMethod && (
               <>
                 <View style={styles.divider} />
@@ -1002,7 +1073,6 @@ const MyGym: React.FC = () => {
           </TouchableOpacity>
         </View>
 
-        {/* Render Plan Details Modal */}
         {renderPlanDetailsModal()}
       </View>
     );
@@ -1082,7 +1152,6 @@ const MyGym: React.FC = () => {
             <Text style={styles.gymAddress}>
               {gym?.address || "Loading..."}
             </Text>
-            {/* Active members count and time slot */}
             <Text style={styles.activeMembersText}>
               {activeCheckInsCount}{" "}
               {activeCheckInsCount === 1 ? "member" : "members"} currently
@@ -1153,7 +1222,6 @@ const MyGym: React.FC = () => {
             <Text style={styles.statLabel}>Total Time</Text>
           </View>
 
-          {/* Active members stat */}
           <View style={styles.statCard}>
             <Ionicons name="people-outline" size={28} color="#3b82f6" />
             <Text style={styles.statNumber}>{activeCheckInsCount}</Text>
@@ -1348,7 +1416,6 @@ const styles = StyleSheet.create({
     lineHeight: 22,
   },
 
-  // View Plan Button Styles
   viewPlanButton: {
     flexDirection: "row",
     alignItems: "center",
@@ -1390,7 +1457,6 @@ const styles = StyleSheet.create({
   },
   pendingBadgeText: { fontSize: 12, fontWeight: "700", color: "#fbbf24" },
 
-  // Quick Summary Styles
   quickSummaryRow: {
     flexDirection: "row",
     alignItems: "center",
@@ -1672,7 +1738,6 @@ const styles = StyleSheet.create({
   submitButtonDisabled: { backgroundColor: "#374151", opacity: 0.5 },
   submitButtonText: { fontSize: 16, fontWeight: "700", color: "#0a0f1a" },
 
-  // Plan Details Modal Styles
   planModalOverlay: {
     flex: 1,
     backgroundColor: "rgba(0, 0, 0, 0.8)",

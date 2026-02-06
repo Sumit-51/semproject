@@ -3,13 +3,15 @@ import { useFocusEffect, useRouter } from "expo-router";
 
 import {
   collection,
-  getDocs,
+  doc,
+  getDoc,
   limit,
+  onSnapshot,
   orderBy,
   query,
   where,
 } from "firebase/firestore";
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Dimensions,
@@ -35,125 +37,207 @@ interface CheckInRecord {
   gymName: string;
 }
 
+interface DailySession {
+  date: string; // "YYYY-MM-DD"
+  totalDuration: number; // Total seconds for the day
+  sessions: CheckInRecord[]; // All sessions for that day
+  latestCheckOutTime: Date; // Most recent check-out time for sorting
+}
+
 const ActivityLog: React.FC = () => {
   const router = useRouter();
   const { userData } = useAuth();
   const [loading, setLoading] = useState(true);
   const [checkInHistory, setCheckInHistory] = useState<CheckInRecord[]>([]);
+  const [dailySessions, setDailySessions] = useState<DailySession[]>([]);
   const [currentMonth, setCurrentMonth] = useState(new Date());
   const [error, setError] = useState<string | null>(null);
+  const [totalDurationFromDB, setTotalDurationFromDB] = useState<number>(0);
 
-  // Load check-in history from Firebase - FIXED VERSION
+  const unsubscribeRef = useRef<(() => void) | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (unsubscribeRef.current) {
+        unsubscribeRef.current();
+        unsubscribeRef.current = null;
+      }
+    };
+  }, []);
+
+  // Load user's total duration from their user document
+  const loadUserTotalDuration = async () => {
+    if (!userData?.uid) {
+      setTotalDurationFromDB(0);
+      return;
+    }
+
+    try {
+      const userDoc = await getDoc(doc(db, "users", userData.uid));
+      if (userDoc.exists()) {
+        const data = userDoc.data();
+        const totalDuration = Number(data.totalDuration) || 0;
+        setTotalDurationFromDB(totalDuration);
+      }
+    } catch (error) {
+      console.error("Error loading user total duration:", error);
+      setTotalDurationFromDB(0);
+    }
+  };
+
+  const combineDailySessions = (records: CheckInRecord[]): DailySession[] => {
+    const dailyMap = new Map<string, DailySession>();
+
+    records.forEach((record) => {
+      const date = record.date;
+
+      if (!dailyMap.has(date)) {
+        dailyMap.set(date, {
+          date,
+          totalDuration: 0,
+          sessions: [],
+          latestCheckOutTime: record.checkOutTime,
+        });
+      }
+
+      const dailySession = dailyMap.get(date)!;
+      dailySession.totalDuration += record.duration;
+      dailySession.sessions.push(record);
+
+      if (
+        record.checkOutTime.getTime() >
+        dailySession.latestCheckOutTime.getTime()
+      ) {
+        dailySession.latestCheckOutTime = record.checkOutTime;
+      }
+    });
+
+    return Array.from(dailyMap.values()).sort(
+      (a, b) => b.latestCheckOutTime.getTime() - a.latestCheckOutTime.getTime(),
+    );
+  };
+
   const loadCheckInHistory = async () => {
-    if (!userData?.uid) return;
+    if (unsubscribeRef.current) {
+      unsubscribeRef.current();
+      unsubscribeRef.current = null;
+    }
+
+    if (!userData?.uid) {
+      setCheckInHistory([]);
+      setDailySessions([]);
+      setLoading(false);
+      setError("Please log in to view your activity history");
+      return;
+    }
+
+    // Check if user has left the gym (no enrollment or not approved)
+    if (
+      !userData?.gymId ||
+      userData?.enrollmentStatus === "none" ||
+      userData?.enrollmentStatus === "rejected"
+    ) {
+      setCheckInHistory([]);
+      setDailySessions([]);
+      setTotalDurationFromDB(0);
+      setLoading(false);
+      return;
+    }
 
     try {
       setLoading(true);
       setError(null);
 
+      // Load user's total duration
+      await loadUserTotalDuration();
+
       const checkInHistoryRef = collection(db, "checkInHistory");
 
-      try {
-        // FIRST TRY: Try the optimized query (needs index)
-        const q = query(
-          checkInHistoryRef,
-          where("userId", "==", userData.uid),
-          orderBy("checkOutTime", "desc"),
-          limit(100), // Limit to 100 most recent records
-        );
+      const q = query(
+        checkInHistoryRef,
+        where("userId", "==", userData.uid),
+        orderBy("checkOutTime", "desc"),
+        limit(100),
+      );
 
-        const querySnapshot = await getDocs(q);
+      const unsubscribe = onSnapshot(
+        q,
+        (querySnapshot) => {
+          const history: CheckInRecord[] = [];
+          querySnapshot.forEach((doc) => {
+            const data = doc.data();
 
-        const history: CheckInRecord[] = [];
-        querySnapshot.forEach((doc) => {
-          const data = doc.data();
+            let dateString = "";
+            if (data.date) {
+              dateString = data.date;
+            } else if (data.checkOutTime) {
+              const checkOutDate = data.checkOutTime.toDate();
+              // Use LOCAL date
+              const localDate = new Date(
+                checkOutDate.getFullYear(),
+                checkOutDate.getMonth(),
+                checkOutDate.getDate(),
+              );
+              dateString = `${localDate.getFullYear()}-${String(localDate.getMonth() + 1).padStart(2, "0")}-${String(localDate.getDate()).padStart(2, "0")}`;
+            }
 
-          // Extract date from timestamp
-          let dateString = "";
-          if (data.date) {
-            dateString = data.date;
-          } else if (data.checkOutTime) {
-            const checkOutDate = data.checkOutTime.toDate();
-            dateString = checkOutDate.toISOString().split("T")[0];
+            history.push({
+              id: doc.id,
+              date: dateString,
+              duration: data.duration || 0,
+              checkInTime: data.checkInTime?.toDate() || new Date(),
+              checkOutTime: data.checkOutTime?.toDate() || new Date(),
+              gymName: data.gymName || "Unknown Gym",
+            });
+          });
+
+          setCheckInHistory(history);
+          setDailySessions(combineDailySessions(history));
+          setLoading(false);
+        },
+        (firestoreError: any) => {
+          if (firestoreError.code === "permission-denied") {
+            setCheckInHistory([]);
+            setDailySessions([]);
+            setError("Please log in to view your activity history");
+            setLoading(false);
+            return;
           }
 
-          history.push({
-            id: doc.id,
-            date: dateString,
-            duration: data.duration || 0,
-            checkInTime: data.checkInTime?.toDate() || new Date(),
-            checkOutTime: data.checkOutTime?.toDate() || new Date(),
-            gymName: data.gymName || "Unknown Gym",
-          });
-        });
+          console.error("Firestore listener error:", firestoreError);
+          setError("Failed to load activity history");
+          setLoading(false);
+        },
+      );
 
-        setCheckInHistory(history);
-      } catch (indexError: any) {
-        // If index error occurs, use a fallback query
-        console.log("Index not ready, using fallback query...");
-
-        // SECOND TRY: Fallback query without orderBy
-        const fallbackQ = query(
-          checkInHistoryRef,
-          where("userId", "==", userData.uid),
-          limit(100),
-        );
-
-        const fallbackSnapshot = await getDocs(fallbackQ);
-
-        const history: CheckInRecord[] = [];
-        fallbackSnapshot.forEach((doc) => {
-          const data = doc.data();
-
-          // Extract date from timestamp
-          let dateString = "";
-          if (data.date) {
-            dateString = data.date;
-          } else if (data.checkOutTime) {
-            const checkOutDate = data.checkOutTime.toDate();
-            dateString = checkOutDate.toISOString().split("T")[0];
-          }
-
-          history.push({
-            id: doc.id,
-            date: dateString,
-            duration: data.duration || 0,
-            checkInTime: data.checkInTime?.toDate() || new Date(),
-            checkOutTime: data.checkOutTime?.toDate() || new Date(),
-            gymName: data.gymName || "Unknown Gym",
-          });
-        });
-
-        // Sort by checkOutTime descending client-side
-        history.sort(
-          (a, b) => b.checkOutTime.getTime() - a.checkOutTime.getTime(),
-        );
-        setCheckInHistory(history);
-
-        // Show warning about index
-        setError(
-          "Note: For better performance, please create the Firestore index by clicking the link in your console.",
-        );
-      }
-    } catch (error: any) {
-      console.error("Error loading check-in history:", error);
-      setError("Failed to load check-in history. Please try again.");
-    } finally {
+      unsubscribeRef.current = unsubscribe;
+    } catch (error) {
+      console.error("Error in loadCheckInHistory:", error);
       setLoading(false);
     }
   };
 
-  // This will reload data every time you come back to this page
   useFocusEffect(
     useCallback(() => {
       loadCheckInHistory();
-    }, [userData?.uid]),
+
+      return () => {
+        if (unsubscribeRef.current) {
+          unsubscribeRef.current();
+          unsubscribeRef.current = null;
+        }
+      };
+    }, [userData?.uid, userData?.gymId, userData?.enrollmentStatus]),
   );
 
-  // Also reload when month changes
   useEffect(() => {
     loadCheckInHistory();
-  }, [currentMonth, userData?.uid]);
+  }, [
+    currentMonth,
+    userData?.uid,
+    userData?.gymId,
+    userData?.enrollmentStatus,
+  ]);
 
   const getDaysInMonth = (date: Date) => {
     const year = date.getFullYear();
@@ -196,7 +280,7 @@ const ActivityLog: React.FC = () => {
     const dateKey = formatDateKey(
       new Date(currentMonth.getFullYear(), currentMonth.getMonth(), day),
     );
-    return checkInHistory.find((record) => record.date === dateKey);
+    return checkInHistory.some((record) => record.date === dateKey);
   };
 
   const previousMonth = () => {
@@ -212,7 +296,6 @@ const ActivityLog: React.FC = () => {
     );
     const today = new Date();
 
-    // Only allow going to current month or past months
     if (
       next.getMonth() <= today.getMonth() &&
       next.getFullYear() <= today.getFullYear()
@@ -248,12 +331,10 @@ const ActivityLog: React.FC = () => {
     const firstDay = getFirstDayOfMonth(currentMonth);
     const days = [];
 
-    // Empty cells for days before month starts
     for (let i = 0; i < firstDay; i++) {
       days.push(<View key={`empty-${i}`} style={styles.dayCell} />);
     }
 
-    // Actual days
     for (let day = 1; day <= daysInMonth; day++) {
       const checkIn = getCheckInForDay(day);
       const today = isToday(day);
@@ -288,26 +369,120 @@ const ActivityLog: React.FC = () => {
     return days;
   };
 
-  const thisMonthAttendance = checkInHistory.filter((record) => {
-    if (!record.date) return false;
+  // Get unique days with check-ins in current month
+  const getUniqueDaysInMonth = () => {
+    const uniqueDates = new Set<string>();
 
-    const recordDate = new Date(record.date);
-    return (
-      recordDate.getMonth() === currentMonth.getMonth() &&
-      recordDate.getFullYear() === currentMonth.getFullYear()
-    );
-  });
+    checkInHistory.forEach((record) => {
+      if (!record.date) return;
 
+      const recordDate = new Date(record.date);
+      if (
+        recordDate.getMonth() === currentMonth.getMonth() &&
+        recordDate.getFullYear() === currentMonth.getFullYear()
+      ) {
+        uniqueDates.add(record.date);
+      }
+    });
+
+    return Array.from(uniqueDates);
+  };
+
+  const uniqueDaysInMonth = getUniqueDaysInMonth();
+  const attendedDays = uniqueDaysInMonth.length;
   const totalDays = getDaysInMonth(currentMonth);
-  const attendedDays = thisMonthAttendance.length;
   const attendanceRate =
     totalDays > 0 ? Math.round((attendedDays / totalDays) * 100) : 0;
-  const totalDuration = thisMonthAttendance.reduce(
-    (sum, record) => sum + record.duration,
-    0,
-  );
 
-  if (loading) {
+  // Calculate total duration for current month (from daily sessions)
+  const monthlyTotalDuration = dailySessions
+    .filter((dailySession) => {
+      const sessionDate = new Date(dailySession.date);
+      return (
+        sessionDate.getMonth() === currentMonth.getMonth() &&
+        sessionDate.getFullYear() === currentMonth.getFullYear()
+      );
+    })
+    .reduce((sum, dailySession) => sum + dailySession.totalDuration, 0);
+
+  // Check if user has left gym or not enrolled
+  const hasNoGym =
+    !userData?.gymId ||
+    userData?.enrollmentStatus === "none" ||
+    userData?.enrollmentStatus === "rejected";
+
+  if (!userData?.uid) {
+    return (
+      <View style={styles.container}>
+        <StatusBar barStyle="light-content" backgroundColor="#0a0f1a" />
+        <View style={styles.header}>
+          <TouchableOpacity
+            onPress={() => router.back()}
+            style={styles.backButton}
+          >
+            <Ionicons name="arrow-back" size={24} color="#e9eef7" />
+          </TouchableOpacity>
+          <Text style={styles.headerTitle}>Activity Log</Text>
+          <View style={styles.refreshButton} />
+        </View>
+
+        <View style={styles.loginPromptContainer}>
+          <Ionicons name="log-in-outline" size={80} color="#64748b" />
+          <Text style={styles.loginPromptTitle}>Login Required</Text>
+          <Text style={styles.loginPromptText}>
+            Please log in to view your activity history
+          </Text>
+          <TouchableOpacity
+            style={styles.loginButton}
+            onPress={() => router.push("/login")}
+          >
+            <Text style={styles.loginButtonText}>Go to Login</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    );
+  }
+
+  if (hasNoGym) {
+    return (
+      <View style={styles.container}>
+        <StatusBar barStyle="light-content" backgroundColor="#0a0f1a" />
+        <View style={styles.header}>
+          <TouchableOpacity
+            onPress={() => router.back()}
+            style={styles.backButton}
+          >
+            <Ionicons name="arrow-back" size={24} color="#e9eef7" />
+          </TouchableOpacity>
+          <Text style={styles.headerTitle}>Activity Log</Text>
+          <View style={styles.refreshButton} />
+        </View>
+
+        <View style={styles.loginPromptContainer}>
+          <Ionicons name="fitness-outline" size={80} color="#64748b" />
+          <Text style={styles.loginPromptTitle}>No Gym Enrolled</Text>
+          <Text style={styles.loginPromptText}>
+            Join a gym to start tracking your activity and building your workout
+            streak!
+          </Text>
+          <TouchableOpacity
+            style={styles.loginButton}
+            onPress={() => router.push("/(member)/home")}
+          >
+            <Ionicons
+              name="search"
+              size={20}
+              color="#0a0f1a"
+              style={{ marginRight: 8 }}
+            />
+            <Text style={styles.loginButtonText}>Browse Gyms</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    );
+  }
+
+  if (loading && checkInHistory.length === 0) {
     return (
       <View style={styles.loadingContainer}>
         <StatusBar barStyle="light-content" backgroundColor="#0a0f1a" />
@@ -341,10 +516,9 @@ const ActivityLog: React.FC = () => {
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
       >
-        {/* Error Banner */}
         {error && (
           <View style={styles.errorBanner}>
-            <Ionicons name="information-circle" size={20} color="#fbbf24" />
+            <Ionicons name="warning-outline" size={20} color="#f87171" />
             <Text style={styles.errorText}>{error}</Text>
             <TouchableOpacity
               onPress={() => setError(null)}
@@ -355,7 +529,6 @@ const ActivityLog: React.FC = () => {
           </View>
         )}
 
-        {/* Month Selector */}
         <View style={styles.monthSelector}>
           <TouchableOpacity onPress={previousMonth} style={styles.monthArrow}>
             <Ionicons name="chevron-back" size={24} color="#e9eef7" />
@@ -392,7 +565,6 @@ const ActivityLog: React.FC = () => {
           </TouchableOpacity>
         </View>
 
-        {/* Stats Summary */}
         <View style={styles.statsContainer}>
           <View style={styles.statBox}>
             <Text style={styles.statNumber}>{attendedDays}</Text>
@@ -404,13 +576,12 @@ const ActivityLog: React.FC = () => {
           </View>
           <View style={styles.statBox}>
             <Text style={styles.statNumber}>
-              {formatDuration(totalDuration)}
+              {formatDuration(monthlyTotalDuration)}
             </Text>
-            <Text style={styles.statLabel}>Total Time</Text>
+            <Text style={styles.statLabel}>Monthly Time</Text>
           </View>
         </View>
 
-        {/* Legend */}
         <View style={styles.legend}>
           <View style={styles.legendItem}>
             <View style={[styles.legendBox, styles.legendBoxPresent]} />
@@ -426,7 +597,6 @@ const ActivityLog: React.FC = () => {
           </View>
         </View>
 
-        {/* Calendar */}
         <View style={styles.calendar}>
           <View style={styles.weekDays}>
             {["S", "M", "T", "W", "T", "F", "S"].map((day, index) => (
@@ -438,72 +608,101 @@ const ActivityLog: React.FC = () => {
           <View style={styles.daysGrid}>{renderCalendar()}</View>
         </View>
 
-        {/* Recent Sessions */}
         <View style={styles.recentSessions}>
           <Text style={styles.sectionTitle}>Recent Sessions</Text>
-          {thisMonthAttendance.length === 0 ? (
+          {dailySessions.length === 0 ? (
             <View style={styles.emptyState}>
               <Ionicons name="calendar-outline" size={48} color="#64748b" />
-              <Text style={styles.emptyStateText}>No check-ins this month</Text>
+              <Text style={styles.emptyStateText}>No check-ins yet</Text>
+              <Text style={styles.emptyStateSubtext}>
+                Start your fitness journey by checking in at the gym!
+              </Text>
             </View>
           ) : (
-            thisMonthAttendance
-              .slice(0, 10) // Already sorted by checkOutTime in loadCheckInHistory
-              .map((record, index) => (
-                <View key={`${record.id}-${index}`} style={styles.sessionCard}>
-                  <View style={styles.sessionLeft}>
-                    <View style={styles.sessionIconContainer}>
-                      <Ionicons name="fitness" size={20} color="#4ade80" />
-                    </View>
-                    <View style={styles.sessionInfo}>
-                      <View style={styles.sessionHeader}>
-                        <Text style={styles.sessionDate}>
-                          {record.checkOutTime.toLocaleDateString("en-US", {
-                            weekday: "short",
-                            month: "short",
-                            day: "numeric",
-                          })}
-                        </Text>
-                        <Text style={styles.sessionTime}>
-                          {formatTime(record.checkInTime)} -{" "}
-                          {formatTime(record.checkOutTime)}
-                        </Text>
+            dailySessions
+              .filter((dailySession) => {
+                const sessionDate = new Date(dailySession.date);
+                return (
+                  sessionDate.getMonth() === currentMonth.getMonth() &&
+                  sessionDate.getFullYear() === currentMonth.getFullYear()
+                );
+              })
+              .slice(0, 10)
+              .map((dailySession, index) => {
+                const sessionDate = new Date(dailySession.date);
+                const gymNames = [
+                  ...new Set(dailySession.sessions.map((s) => s.gymName)),
+                ];
+                const sessionCount = dailySession.sessions.length;
+
+                return (
+                  <View
+                    key={`${dailySession.date}-${index}`}
+                    style={styles.sessionCard}
+                  >
+                    <View style={styles.sessionLeft}>
+                      <View style={styles.sessionIconContainer}>
+                        <Ionicons name="fitness" size={20} color="#4ade80" />
+                        {sessionCount > 1 && (
+                          <View style={styles.sessionCountBadge}>
+                            <Text style={styles.sessionCountText}>
+                              {sessionCount}
+                            </Text>
+                          </View>
+                        )}
                       </View>
-                      <View style={styles.sessionDetails}>
-                        <Text style={styles.sessionDuration}>
-                          {formatDuration(record.duration)}
-                        </Text>
-                        <Text style={styles.sessionGym}>{record.gymName}</Text>
+                      <View style={styles.sessionInfo}>
+                        <View style={styles.sessionHeader}>
+                          <Text style={styles.sessionDate}>
+                            {sessionDate.toLocaleDateString("en-US", {
+                              weekday: "short",
+                              month: "short",
+                              day: "numeric",
+                            })}
+                          </Text>
+                          <Text style={styles.sessionCount}>
+                            {sessionCount}{" "}
+                            {sessionCount === 1 ? "session" : "sessions"}
+                          </Text>
+                        </View>
+                        <View style={styles.sessionDetails}>
+                          <Text style={styles.sessionDuration}>
+                            {formatDuration(dailySession.totalDuration)}
+                          </Text>
+                          <Text style={styles.sessionGym}>
+                            {gymNames.length === 1
+                              ? gymNames[0]
+                              : `${gymNames[0]} + ${gymNames.length - 1} more`}
+                          </Text>
+                        </View>
                       </View>
                     </View>
+                    <Ionicons
+                      name="checkmark-circle"
+                      size={24}
+                      color="#4ade80"
+                    />
                   </View>
-                  <Ionicons name="checkmark-circle" size={24} color="#4ade80" />
-                </View>
-              ))
+                );
+              })
           )}
         </View>
 
-        {/* Total Stats */}
-        {checkInHistory.length > 0 && (
+        {dailySessions.length > 0 && (
           <View style={styles.totalStats}>
             <Text style={styles.sectionTitle}>All Time Stats</Text>
             <View style={styles.totalStatsGrid}>
               <View style={styles.totalStatCard}>
                 <Ionicons name="calendar-outline" size={24} color="#fbbf24" />
                 <Text style={styles.totalStatNumber}>
-                  {checkInHistory.length}
+                  {dailySessions.length}
                 </Text>
-                <Text style={styles.totalStatLabel}>Total Sessions</Text>
+                <Text style={styles.totalStatLabel}>Days Attended</Text>
               </View>
               <View style={styles.totalStatCard}>
                 <Ionicons name="time-outline" size={24} color="#a855f7" />
                 <Text style={styles.totalStatNumber}>
-                  {formatDuration(
-                    checkInHistory.reduce(
-                      (sum, record) => sum + record.duration,
-                      0,
-                    ),
-                  )}
+                  {formatDuration(Math.floor(totalDurationFromDB))}
                 </Text>
                 <Text style={styles.totalStatLabel}>Total Time</Text>
               </View>
@@ -533,6 +732,39 @@ const styles = StyleSheet.create({
     color: "#94a3b8",
     marginTop: 16,
     fontSize: 16,
+  },
+  loginPromptContainer: {
+    flex: 1,
+    justifyContent: "center",
+    alignItems: "center",
+    paddingHorizontal: 40,
+  },
+  loginPromptTitle: {
+    fontSize: 24,
+    fontWeight: "700",
+    color: "#e9eef7",
+    marginTop: 20,
+  },
+  loginPromptText: {
+    fontSize: 16,
+    color: "#64748b",
+    marginTop: 12,
+    textAlign: "center",
+    lineHeight: 22,
+  },
+  loginButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#4ade80",
+    paddingHorizontal: 24,
+    paddingVertical: 14,
+    borderRadius: 12,
+    marginTop: 24,
+  },
+  loginButtonText: {
+    fontSize: 16,
+    fontWeight: "700",
+    color: "#0a0f1a",
   },
   header: {
     flexDirection: "row",
@@ -723,9 +955,16 @@ const styles = StyleSheet.create({
     paddingVertical: 40,
   },
   emptyStateText: {
+    fontSize: 16,
+    fontWeight: "600",
+    color: "#94a3b8",
+    marginTop: 12,
+  },
+  emptyStateSubtext: {
     fontSize: 14,
     color: "#64748b",
-    marginTop: 12,
+    marginTop: 6,
+    textAlign: "center",
   },
   sessionCard: {
     flexDirection: "row",
@@ -751,6 +990,25 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(74, 222, 128, 0.1)",
     alignItems: "center",
     justifyContent: "center",
+    position: "relative",
+  },
+  sessionCountBadge: {
+    position: "absolute",
+    top: -4,
+    right: -4,
+    backgroundColor: "#3b82f6",
+    width: 18,
+    height: 18,
+    borderRadius: 9,
+    justifyContent: "center",
+    alignItems: "center",
+    borderWidth: 1,
+    borderColor: "#0a0f1a",
+  },
+  sessionCountText: {
+    color: "#fff",
+    fontSize: 10,
+    fontWeight: "bold",
   },
   sessionInfo: {
     flex: 1,
@@ -766,9 +1024,10 @@ const styles = StyleSheet.create({
     fontWeight: "600",
     color: "#e9eef7",
   },
-  sessionTime: {
+  sessionCount: {
     fontSize: 12,
     color: "#94a3b8",
+    fontStyle: "italic",
   },
   sessionDetails: {
     flexDirection: "row",
@@ -812,13 +1071,12 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: "#94a3b8",
   },
-  // Error banner styles
   errorBanner: {
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: "rgba(251, 191, 36, 0.1)",
+    backgroundColor: "rgba(248, 113, 113, 0.1)",
     borderWidth: 1,
-    borderColor: "rgba(251, 191, 36, 0.3)",
+    borderColor: "rgba(248, 113, 113, 0.3)",
     borderRadius: 12,
     padding: 12,
     marginBottom: 16,
@@ -827,7 +1085,7 @@ const styles = StyleSheet.create({
   errorText: {
     flex: 1,
     fontSize: 13,
-    color: "#fbbf24",
+    color: "#f87171",
     marginLeft: 8,
     marginRight: 8,
   },
