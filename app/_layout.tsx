@@ -1,8 +1,8 @@
-import { GluestackUIProvider } from '@/components/ui/gluestack-ui-provider';
-import '@/global.css';
-import { Stack } from 'expo-router';
-import React from 'react';
-import { AuthProvider } from './context/AuthContext';
+import { GluestackUIProvider } from "@/components/ui/gluestack-ui-provider";
+import "@/global.css";
+import { Stack } from "expo-router";
+import React from "react";
+import { AuthProvider } from "./context/AuthContext";
 
 const RootLayout: React.FC = () => {
   return (
@@ -13,8 +13,7 @@ const RootLayout: React.FC = () => {
           <Stack.Screen name="login" />
           <Stack.Screen name="signup" />
           <Stack.Screen name="forgot-password" />
-          <Stack.Screen name="(auth)" />
-          <Stack. Screen name="(member)" />
+          <Stack.Screen name="(member)" />
         </Stack>
       </GluestackUIProvider>
     </AuthProvider>

@@ -1,22 +1,21 @@
 import { Ionicons } from "@expo/vector-icons";
-import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useRouter } from "expo-router";
 import {
   collection,
   doc,
-  getDoc,
-  getDocs,
+  onSnapshot,
   query,
   updateDoc,
   where,
 } from "firebase/firestore";
-import React, { useEffect, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
   Dimensions,
   Modal,
   Platform,
+  RefreshControl,
   ScrollView,
   StatusBar,
   StyleSheet,
@@ -26,10 +25,13 @@ import {
 } from "react-native";
 import { useAuth } from "../context/AuthContext";
 import { db } from "../lib/firebase";
+import { UserData } from "../types";
 
 const { width, height } = Dimensions.get("window");
 
-type TimeSlot = "Morning" | "Evening" | "Night";
+// Define TimeSlot based on your UserData type
+type TimeSlot = NonNullable<UserData["timeSlot"]>;
+
 type TimeSlotDetails = {
   name: TimeSlot;
   description: string;
@@ -50,16 +52,13 @@ const TimeSlotPage: React.FC = () => {
   const [gymName, setGymName] = useState<string>("");
 
   // Member counts for each time slot
-  const [memberCounts, setMemberCounts] = useState<{
-    Morning: number;
-    Evening: number;
-    Night: number;
-  }>({
+  const [memberCounts, setMemberCounts] = useState<Record<string, number>>({
     Morning: 0,
     Evening: 0,
     Night: 0,
   });
   const [loadingCounts, setLoadingCounts] = useState<boolean>(false);
+  const [refreshing, setRefreshing] = useState<boolean>(false);
 
   const timeSlots: TimeSlotDetails[] = [
     {
@@ -85,74 +84,127 @@ const TimeSlotPage: React.FC = () => {
     },
   ];
 
+  // Check if user is approved for gym access
+  const isUserApproved = useCallback((user: UserData | null) => {
+    return user?.enrollmentStatus === "approved" && user?.gymId;
+  }, []);
+
+  // Load user's time slot with real-time listener
   useEffect(() => {
+    if (!userData?.uid) return;
+
+    let unsubscribeUser: (() => void) | undefined;
+    let unsubscribeGym: (() => void) | undefined;
+
+    const loadUserTimeSlot = async () => {
+      try {
+        setLoading(true);
+
+        // Set up real-time listener for user's time slot
+        const userDocRef = doc(db, "users", userData.uid);
+        unsubscribeUser = onSnapshot(userDocRef, (docSnapshot) => {
+          if (docSnapshot.exists()) {
+            const data = docSnapshot.data() as UserData;
+
+            // Only update if user is still approved
+            if (isUserApproved(data)) {
+              setCurrentTimeSlot(data.timeSlot || null);
+
+              // Update gym name if gymId exists
+              if (data.gymId) {
+                const gymDocRef = doc(db, "gyms", data.gymId);
+                unsubscribeGym = onSnapshot(gymDocRef, (gymSnapshot) => {
+                  if (gymSnapshot.exists()) {
+                    const gymData = gymSnapshot.data();
+                    setGymName(gymData.name || "");
+                  }
+                });
+              } else {
+                setGymName("");
+              }
+            } else {
+              // User is no longer approved, clear time slot
+              setCurrentTimeSlot(null);
+              setGymName("");
+            }
+          }
+        });
+      } catch (error) {
+        console.error("Error loading time slot:", error);
+        Alert.alert("Error", "Failed to load time slot data");
+      } finally {
+        setLoading(false);
+      }
+    };
+
     loadUserTimeSlot();
-    loadMemberCounts();
-  }, [userData]);
 
-  const loadUserTimeSlot = async () => {
-    try {
-      setLoading(true);
+    // Cleanup function
+    return () => {
+      unsubscribeUser?.();
+      unsubscribeGym?.();
+    };
+  }, [userData?.uid, isUserApproved]);
 
-      if (
-        userData?.timeSlot &&
-        ["Morning", "Evening", "Night"].includes(userData.timeSlot)
-      ) {
-        setCurrentTimeSlot(userData.timeSlot);
-      } else {
-        const savedTimeSlot = (await AsyncStorage.getItem(
-          "userTimeSlot",
-        )) as TimeSlot | null;
-        if (
-          savedTimeSlot &&
-          ["Morning", "Evening", "Night"].includes(savedTimeSlot)
-        ) {
-          setCurrentTimeSlot(savedTimeSlot);
-        } else {
-          setCurrentTimeSlot(null);
-        }
-      }
-
-      if (userData?.gymId) {
-        const gymDoc = await getDoc(doc(db, "gyms", userData.gymId));
-        if (gymDoc.exists()) {
-          setGymName(gymDoc.data().name || "");
-        }
-      }
-    } catch (error) {
-      console.error("Error loading time slot:", error);
-    } finally {
-      setLoading(false);
+  // Load member counts with real-time listeners
+  useEffect(() => {
+    if (!userData?.gymId || !isUserApproved(userData)) {
+      console.log("No gym access or user not approved");
+      setMemberCounts({ Morning: 0, Evening: 0, Night: 0 });
+      return;
     }
-  };
 
-  const loadMemberCounts = async () => {
-    if (!userData?.gymId) return;
+    const unsubscribers: (() => void)[] = [];
 
-    setLoadingCounts(true);
-    try {
-      const counts = { Morning: 0, Evening: 0, Night: 0 };
+    const loadRealTimeMemberCounts = () => {
+      setLoadingCounts(true);
 
-      // Query for each time slot
-      for (const slot of ["Morning", "Evening", "Night"] as TimeSlot[]) {
-        const q = query(
-          collection(db, "users"),
-          where("gymId", "==", userData.gymId),
-          where("timeSlot", "==", slot),
-          where("enrollmentStatus", "==", "approved"),
+      try {
+        // Create real-time queries for each time slot
+        (["Morning", "Evening", "Night"] as TimeSlot[]).forEach(
+          (slot: TimeSlot) => {
+            // Query for approved users in this gym and time slot
+            const q = query(
+              collection(db, "users"),
+              where("gymId", "==", userData.gymId),
+              where("timeSlot", "==", slot),
+              where("enrollmentStatus", "==", "approved"),
+            );
+
+            const unsubscribe = onSnapshot(
+              q,
+              (querySnapshot) => {
+                setMemberCounts((prev) => ({
+                  ...prev,
+                  [slot]: querySnapshot.size,
+                }));
+              },
+              (error) => {
+                console.error(`Error listening to ${slot} slot:`, error);
+                if (error.code === "permission-denied") {
+                  console.log("Permission denied for time slot query");
+                }
+              },
+            );
+
+            unsubscribers.push(unsubscribe);
+          },
         );
-
-        const querySnapshot = await getDocs(q);
-        counts[slot] = querySnapshot.size;
+      } catch (error) {
+        console.error("Error setting up real-time listeners:", error);
+        Alert.alert("Error", "Failed to load crowd data");
+      } finally {
+        setLoadingCounts(false);
       }
+    };
 
-      setMemberCounts(counts);
-    } catch (error) {
-      console.error("Error loading member counts:", error);
-    } finally {
-      setLoadingCounts(false);
-    }
-  };
+    loadRealTimeMemberCounts();
+
+    // Cleanup function
+    return () => {
+      unsubscribers.forEach((unsubscribe) => unsubscribe());
+    };
+  }, [userData?.gymId, isUserApproved]);
 
   const getCrowdLevel = (
     count: number,
@@ -181,6 +233,15 @@ const TimeSlotPage: React.FC = () => {
       return;
     }
 
+    // Check if user is approved
+    if (!isUserApproved(userData)) {
+      Alert.alert(
+        "Not Approved",
+        "You need to be approved in a gym to set a time slot",
+      );
+      return;
+    }
+
     setChangingSlot(true);
     try {
       await updateDoc(doc(db, "users", userData.uid), {
@@ -188,15 +249,12 @@ const TimeSlotPage: React.FC = () => {
         timeSlotUpdatedAt: new Date(),
       });
 
-      await AsyncStorage.setItem("userTimeSlot", selectedSlot);
+      // Refresh user data to get updated time slot
       await refreshUserData();
 
       setCurrentTimeSlot(selectedSlot);
       setShowChangeModal(false);
       setSelectedSlot(null);
-
-      // Reload counts after change
-      await loadMemberCounts();
 
       Alert.alert(
         "Success!",
@@ -223,43 +281,100 @@ const TimeSlotPage: React.FC = () => {
     return "Good Evening!";
   };
 
-  if (loading) {
-    return (
-      <View style={styles.loadingContainer}>
-        <StatusBar barStyle="light-content" backgroundColor="#0a0f1a" />
-        <ActivityIndicator size="large" color="#4ade80" />
-        <Text style={styles.loadingText}>Loading...</Text>
-      </View>
-    );
-  }
+  // Refresh all data
+  const refreshAllData = async () => {
+    setRefreshing(true);
+    try {
+      await refreshUserData();
+    } catch (error) {
+      console.error("Error refreshing data:", error);
+    } finally {
+      setRefreshing(false);
+    }
+  };
 
-  const currentSlotDetails = getCurrentTimeSlotDetails();
+  // Handle manual refresh
+  const onRefresh = async () => {
+    await refreshAllData();
+  };
 
-  return (
-    <View style={styles.container}>
-      <StatusBar barStyle="light-content" backgroundColor="#0a0f1a" />
-      <View style={styles.accentCircleOne} />
-      <View style={styles.accentCircleTwo} />
-
-      <ScrollView
-        contentContainerStyle={styles.scrollContent}
-        showsVerticalScrollIndicator={false}
-      >
-        <View style={styles.header}>
-          <TouchableOpacity
-            onPress={() => router.back()}
-            style={styles.backButton}
-          >
-            <Ionicons name="arrow-back" size={24} color="#e9eef7" />
-          </TouchableOpacity>
-          <Text style={styles.headerTitle}>Time Slot</Text>
-          <View style={{ width: 40 }} />
+  // Render different states based on user status
+  const renderContent = () => {
+    // Loading state
+    if (loading) {
+      return (
+        <View style={styles.loadingContainer}>
+          <ActivityIndicator size="large" color="#4ade80" />
+          <Text style={styles.loadingText}>Loading time slot data...</Text>
         </View>
+      );
+    }
 
+    // Not enrolled in any gym
+    if (!userData?.gymId) {
+      return (
+        <View style={styles.noGymContainer}>
+          <Ionicons name="business-outline" size={64} color="#64748b" />
+          <Text style={styles.noGymTitle}>Not Enrolled in a Gym</Text>
+          <Text style={styles.noGymText}>
+            You need to enroll in a gym to access time slot features.
+          </Text>
+          <TouchableOpacity
+            style={styles.enrollButton}
+            onPress={() => {
+              // Try to navigate to home or explore
+              try {
+                router.push("/");
+              } catch {
+                router.push("/(tabs)");
+              }
+            }}
+          >
+            <Text style={styles.enrollButtonText}>Browse Gyms</Text>
+          </TouchableOpacity>
+        </View>
+      );
+    }
+
+    // Enrolled but not approved
+    if (userData.enrollmentStatus !== "approved") {
+      const statusText =
+        userData.enrollmentStatus === "pending"
+          ? "Your enrollment is pending approval"
+          : userData.enrollmentStatus === "rejected"
+            ? "Your enrollment was rejected"
+            : "Your enrollment status is not approved";
+
+      return (
+        <View style={styles.pendingContainer}>
+          <Ionicons name="time-outline" size={64} color="#fbbf24" />
+          <Text style={styles.pendingTitle}>Awaiting Approval</Text>
+          <Text style={styles.pendingText}>
+            {statusText}. You'll be able to set a time slot once approved.
+          </Text>
+          <Text style={styles.pendingSubtext}>
+            Current status: {userData.enrollmentStatus}
+          </Text>
+        </View>
+      );
+    }
+
+    // Approved and has gym access - show time slot UI
+    const currentSlotDetails = getCurrentTimeSlotDetails();
+
+    return (
+      <>
         <View style={styles.currentSlotCard}>
           <View style={styles.cardHeader}>
             <Ionicons name="time-outline" size={28} color="#4ade80" />
             <Text style={styles.cardTitle}>Your Current Time Slot</Text>
+            {loadingCounts && (
+              <ActivityIndicator
+                size="small"
+                color="#4ade80"
+                style={{ marginLeft: 10 }}
+              />
+            )}
           </View>
 
           {currentSlotDetails ? (
@@ -302,6 +417,7 @@ const TimeSlotPage: React.FC = () => {
                 </View>
                 <Text style={styles.lastUpdated}>
                   {memberCounts[currentSlotDetails.name]} members in this slot
+                  {loadingCounts && " (updating...)"}
                 </Text>
               </View>
             </>
@@ -321,6 +437,7 @@ const TimeSlotPage: React.FC = () => {
           style={styles.changeButton}
           onPress={() => setShowChangeModal(true)}
           activeOpacity={0.8}
+          disabled={loadingCounts}
         >
           <Ionicons name="swap-horizontal" size={22} color="#0a0f1a" />
           <Text style={styles.changeButtonText}>
@@ -330,7 +447,12 @@ const TimeSlotPage: React.FC = () => {
 
         {/* Crowd Overview */}
         <View style={styles.crowdOverview}>
-          <Text style={styles.crowdTitle}>Current Crowd Levels</Text>
+          <View style={styles.crowdHeader}>
+            <Text style={styles.crowdTitle}>Current Crowd Levels</Text>
+            {loadingCounts && (
+              <ActivityIndicator size="small" color="#4ade80" />
+            )}
+          </View>
           {timeSlots.map((slot) => {
             const crowd = getCrowdLevel(memberCounts[slot.name]);
             return (
@@ -371,6 +493,7 @@ const TimeSlotPage: React.FC = () => {
                   </View>
                   <Text style={styles.crowdCount}>
                     {memberCounts[slot.name]} members
+                    {loadingCounts && " ..."}
                   </Text>
                 </View>
               </View>
@@ -378,6 +501,66 @@ const TimeSlotPage: React.FC = () => {
           })}
         </View>
 
+        {/* Gym Info */}
+        {gymName && (
+          <View style={styles.gymInfoCard}>
+            <View style={styles.gymInfoHeader}>
+              <Ionicons name="business-outline" size={20} color="#4ade80" />
+              <Text style={styles.gymInfoTitle}>Your Gym</Text>
+            </View>
+            <Text style={styles.gymInfoText}>{gymName}</Text>
+            <Text style={styles.gymInfoStatus}>
+              Status:{" "}
+              <Text style={styles.gymInfoStatusApproved}>Approved ✓</Text>
+            </Text>
+          </View>
+        )}
+      </>
+    );
+  };
+
+  return (
+    <View style={styles.container}>
+      <StatusBar barStyle="light-content" backgroundColor="#0a0f1a" />
+      <View style={styles.accentCircleOne} />
+      <View style={styles.accentCircleTwo} />
+
+      <ScrollView
+        contentContainerStyle={styles.scrollContent}
+        showsVerticalScrollIndicator={false}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            tintColor="#4ade80"
+            colors={["#4ade80"]}
+          />
+        }
+      >
+        <View style={styles.header}>
+          <TouchableOpacity
+            onPress={() => router.back()}
+            style={styles.backButton}
+          >
+            <Ionicons name="arrow-back" size={24} color="#e9eef7" />
+          </TouchableOpacity>
+          <Text style={styles.headerTitle}>Time Slot</Text>
+          <TouchableOpacity
+            onPress={refreshAllData}
+            style={styles.refreshButton}
+            disabled={refreshing}
+          >
+            {refreshing ? (
+              <ActivityIndicator size="small" color="#4ade80" />
+            ) : (
+              <Ionicons name="refresh" size={22} color="#4ade80" />
+            )}
+          </TouchableOpacity>
+        </View>
+
+        {renderContent()}
+
+        {/* Benefits section shown to all users */}
         <View style={styles.benefitsCard}>
           <Text style={styles.benefitsTitle}>
             Benefits of Setting a Time Slot
@@ -426,143 +609,150 @@ const TimeSlotPage: React.FC = () => {
         </View>
       </ScrollView>
 
-      <Modal visible={showChangeModal} transparent animationType="slide">
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>
-                {currentTimeSlot ? "Change Time Slot" : "Select Time Slot"}
-              </Text>
-              <TouchableOpacity onPress={handleCancelChange}>
-                <Ionicons name="close" size={28} color="#e9eef7" />
-              </TouchableOpacity>
-            </View>
-
-            <ScrollView style={styles.modalScroll}>
-              <Text style={styles.modalSubtitle}>
-                Choose your preferred workout time
-              </Text>
-
-              {timeSlots.map((slot) => {
-                const crowd = getCrowdLevel(memberCounts[slot.name]);
-                return (
-                  <TouchableOpacity
-                    key={slot.name}
-                    style={[
-                      styles.slotOption,
-                      selectedSlot === slot.name && styles.slotOptionSelected,
-                      currentTimeSlot === slot.name && styles.currentSlotOption,
-                    ]}
-                    onPress={() => handleSelectSlot(slot.name)}
-                    activeOpacity={0.7}
-                  >
-                    <View
-                      style={[
-                        styles.optionIconContainer,
-                        { backgroundColor: slot.color },
-                      ]}
-                    >
-                      <Ionicons
-                        name={slot.icon as any}
-                        size={24}
-                        color="#0a0f1a"
-                      />
-                    </View>
-
-                    <View style={styles.optionInfo}>
-                      <View style={styles.optionHeader}>
-                        <Text style={styles.optionName}>{slot.name}</Text>
-                        {currentTimeSlot === slot.name && (
-                          <View style={styles.currentBadge}>
-                            <Text style={styles.currentBadgeText}>Current</Text>
-                          </View>
-                        )}
-                      </View>
-                      <Text style={styles.optionTime}>{slot.timeRange}</Text>
-                      <Text style={styles.optionDescription}>
-                        {slot.description}
-                      </Text>
-
-                      {/* Crowd indicator in modal */}
-                      <View style={styles.optionCrowd}>
-                        <View
-                          style={[
-                            styles.optionCrowdBadge,
-                            { backgroundColor: `${crowd.color}20` },
-                          ]}
-                        >
-                          <Ionicons
-                            name={crowd.icon as any}
-                            size={12}
-                            color={crowd.color}
-                          />
-                          <Text
-                            style={[
-                              styles.optionCrowdText,
-                              { color: crowd.color },
-                            ]}
-                          >
-                            {crowd.label}
-                          </Text>
-                        </View>
-                        <Text style={styles.optionMemberCount}>
-                          {memberCounts[slot.name]} members
-                        </Text>
-                      </View>
-                    </View>
-
-                    <View style={styles.optionSelector}>
-                      {selectedSlot === slot.name ? (
-                        <Ionicons
-                          name="checkmark-circle"
-                          size={28}
-                          color={slot.color}
-                        />
-                      ) : (
-                        <View
-                          style={[
-                            styles.selectorCircle,
-                            { borderColor: slot.color },
-                          ]}
-                        />
-                      )}
-                    </View>
-                  </TouchableOpacity>
-                );
-              })}
-
-              <View style={styles.modalButtons}>
-                <TouchableOpacity
-                  style={[styles.modalButton, styles.cancelButton]}
-                  onPress={handleCancelChange}
-                  disabled={changingSlot}
-                >
-                  <Text style={styles.cancelButtonText}>Cancel</Text>
-                </TouchableOpacity>
-
-                <TouchableOpacity
-                  style={[
-                    styles.modalButton,
-                    styles.confirmButton,
-                    (!selectedSlot || changingSlot) &&
-                      styles.confirmButtonDisabled,
-                  ]}
-                  onPress={handleConfirmChange}
-                  disabled={!selectedSlot || changingSlot}
-                >
-                  {changingSlot ? (
-                    <ActivityIndicator color="#0a0f1a" />
-                  ) : (
-                    <Text style={styles.confirmButtonText}>
-                      {currentTimeSlot ? "Change Slot" : "Confirm Selection"}
-                    </Text>
-                  )}
+      {/* Modal for changing time slot - only shown if user is approved */}
+      {isUserApproved(userData) && (
+        <Modal visible={showChangeModal} transparent animationType="slide">
+          <View style={styles.modalOverlay}>
+            <View style={styles.modalContent}>
+              <View style={styles.modalHeader}>
+                <Text style={styles.modalTitle}>
+                  {currentTimeSlot ? "Change Time Slot" : "Select Time Slot"}
+                </Text>
+                <TouchableOpacity onPress={handleCancelChange}>
+                  <Ionicons name="close" size={28} color="#e9eef7" />
                 </TouchableOpacity>
               </View>
-            </ScrollView>
+
+              <ScrollView style={styles.modalScroll}>
+                <Text style={styles.modalSubtitle}>
+                  Choose your preferred workout time
+                </Text>
+
+                {timeSlots.map((slot) => {
+                  const crowd = getCrowdLevel(memberCounts[slot.name]);
+                  return (
+                    <TouchableOpacity
+                      key={slot.name}
+                      style={[
+                        styles.slotOption,
+                        selectedSlot === slot.name && styles.slotOptionSelected,
+                        currentTimeSlot === slot.name &&
+                          styles.currentSlotOption,
+                      ]}
+                      onPress={() => handleSelectSlot(slot.name)}
+                      activeOpacity={0.7}
+                    >
+                      <View
+                        style={[
+                          styles.optionIconContainer,
+                          { backgroundColor: slot.color },
+                        ]}
+                      >
+                        <Ionicons
+                          name={slot.icon as any}
+                          size={24}
+                          color="#0a0f1a"
+                        />
+                      </View>
+
+                      <View style={styles.optionInfo}>
+                        <View style={styles.optionHeader}>
+                          <Text style={styles.optionName}>{slot.name}</Text>
+                          {currentTimeSlot === slot.name && (
+                            <View style={styles.currentBadge}>
+                              <Text style={styles.currentBadgeText}>
+                                Current
+                              </Text>
+                            </View>
+                          )}
+                        </View>
+                        <Text style={styles.optionTime}>{slot.timeRange}</Text>
+                        <Text style={styles.optionDescription}>
+                          {slot.description}
+                        </Text>
+
+                        {/* Crowd indicator in modal */}
+                        <View style={styles.optionCrowd}>
+                          <View
+                            style={[
+                              styles.optionCrowdBadge,
+                              { backgroundColor: `${crowd.color}20` },
+                            ]}
+                          >
+                            <Ionicons
+                              name={crowd.icon as any}
+                              size={12}
+                              color={crowd.color}
+                            />
+                            <Text
+                              style={[
+                                styles.optionCrowdText,
+                                { color: crowd.color },
+                              ]}
+                            >
+                              {crowd.label}
+                            </Text>
+                          </View>
+                          <Text style={styles.optionMemberCount}>
+                            {memberCounts[slot.name]} members
+                            {loadingCounts && " (live)"}
+                          </Text>
+                        </View>
+                      </View>
+
+                      <View style={styles.optionSelector}>
+                        {selectedSlot === slot.name ? (
+                          <Ionicons
+                            name="checkmark-circle"
+                            size={28}
+                            color={slot.color}
+                          />
+                        ) : (
+                          <View
+                            style={[
+                              styles.selectorCircle,
+                              { borderColor: slot.color },
+                            ]}
+                          />
+                        )}
+                      </View>
+                    </TouchableOpacity>
+                  );
+                })}
+
+                <View style={styles.modalButtons}>
+                  <TouchableOpacity
+                    style={[styles.modalButton, styles.cancelButton]}
+                    onPress={handleCancelChange}
+                    disabled={changingSlot}
+                  >
+                    <Text style={styles.cancelButtonText}>Cancel</Text>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    style={[
+                      styles.modalButton,
+                      styles.confirmButton,
+                      (!selectedSlot || changingSlot) &&
+                        styles.confirmButtonDisabled,
+                    ]}
+                    onPress={handleConfirmChange}
+                    disabled={!selectedSlot || changingSlot}
+                  >
+                    {changingSlot ? (
+                      <ActivityIndicator color="#0a0f1a" />
+                    ) : (
+                      <Text style={styles.confirmButtonText}>
+                        {currentTimeSlot ? "Change Slot" : "Confirm Selection"}
+                      </Text>
+                    )}
+                  </TouchableOpacity>
+                </View>
+              </ScrollView>
+            </View>
           </View>
-        </View>
-      </Modal>
+        </Modal>
+      )}
     </View>
   );
 };
@@ -576,11 +766,9 @@ const styles = StyleSheet.create({
     paddingTop: Platform.OS === "android" ? StatusBar.currentHeight : 0,
   },
   loadingContainer: {
-    flex: 1,
-    backgroundColor: "#0a0f1a",
-    justifyContent: "center",
     alignItems: "center",
-    paddingTop: Platform.OS === "android" ? StatusBar.currentHeight : 0,
+    justifyContent: "center",
+    paddingVertical: 40,
   },
   loadingText: {
     color: "#94a3b8",
@@ -630,6 +818,76 @@ const styles = StyleSheet.create({
     color: "#e9eef7",
     textAlign: "center",
     flex: 1,
+  },
+  refreshButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: "rgba(74, 222, 128, 0.1)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  noGymContainer: {
+    backgroundColor: "rgba(15, 23, 42, 0.8)",
+    borderRadius: 20,
+    padding: 30,
+    alignItems: "center",
+    marginBottom: 24,
+    borderWidth: 1,
+    borderColor: "rgba(255, 255, 255, 0.06)",
+  },
+  noGymTitle: {
+    fontSize: 20,
+    fontWeight: "600",
+    color: "#e9eef7",
+    marginTop: 16,
+    marginBottom: 8,
+  },
+  noGymText: {
+    fontSize: 14,
+    color: "#94a3b8",
+    textAlign: "center",
+    lineHeight: 20,
+    marginBottom: 20,
+  },
+  enrollButton: {
+    backgroundColor: "#4ade80",
+    paddingHorizontal: 24,
+    paddingVertical: 12,
+    borderRadius: 12,
+  },
+  enrollButtonText: {
+    fontSize: 16,
+    fontWeight: "600",
+    color: "#0a0f1a",
+  },
+  pendingContainer: {
+    backgroundColor: "rgba(15, 23, 42, 0.8)",
+    borderRadius: 20,
+    padding: 30,
+    alignItems: "center",
+    marginBottom: 24,
+    borderWidth: 1,
+    borderColor: "rgba(251, 191, 36, 0.2)",
+  },
+  pendingTitle: {
+    fontSize: 20,
+    fontWeight: "600",
+    color: "#fbbf24",
+    marginTop: 16,
+    marginBottom: 8,
+  },
+  pendingText: {
+    fontSize: 14,
+    color: "#94a3b8",
+    textAlign: "center",
+    lineHeight: 20,
+    marginBottom: 8,
+  },
+  pendingSubtext: {
+    fontSize: 13,
+    color: "#64748b",
+    fontWeight: "600",
   },
   currentSlotCard: {
     backgroundColor: "rgba(15, 23, 42, 0.8)",
@@ -762,11 +1020,16 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: "rgba(255, 255, 255, 0.06)",
   },
+  crowdHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 16,
+  },
   crowdTitle: {
     fontSize: 18,
     fontWeight: "600",
     color: "#e9eef7",
-    marginBottom: 16,
   },
   crowdItem: {
     flexDirection: "row",
@@ -817,6 +1080,39 @@ const styles = StyleSheet.create({
   crowdCount: {
     fontSize: 12,
     color: "#94a3b8",
+  },
+  gymInfoCard: {
+    backgroundColor: "rgba(15, 23, 42, 0.8)",
+    borderRadius: 16,
+    padding: 16,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: "rgba(74, 222, 128, 0.2)",
+  },
+  gymInfoHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    marginBottom: 8,
+  },
+  gymInfoTitle: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: "#4ade80",
+  },
+  gymInfoText: {
+    fontSize: 16,
+    fontWeight: "600",
+    color: "#e9eef7",
+    marginBottom: 4,
+  },
+  gymInfoStatus: {
+    fontSize: 13,
+    color: "#94a3b8",
+  },
+  gymInfoStatusApproved: {
+    color: "#4ade80",
+    fontWeight: "600",
   },
   benefitsCard: {
     backgroundColor: "rgba(15, 23, 42, 0.8)",
