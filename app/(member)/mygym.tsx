@@ -30,12 +30,10 @@ import {
 } from "react-native";
 import { useAuth } from "../context/AuthContext";
 import { db } from "../lib/firebase";
-import { Gym } from "../types/index";
+import { Gym, IssueType, ReportStatus } from "../types/index";
 
 const { width, height } = Dimensions.get("window");
 const isSmall = height < 700;
-
-type IssueType = "Equipment" | "Cleanliness" | "Staff" | "Safety" | "Other";
 
 const MyGym: React.FC = () => {
   const { userData, refreshUserData } = useAuth();
@@ -196,6 +194,10 @@ const MyGym: React.FC = () => {
         streak: streakValue,
         totalDuration: totalDurationValue,
         statsUpdatedAt: serverTimestamp(),
+      });
+      console.log("✅ User stats updated in Firebase:", {
+        streak: streakValue,
+        totalDuration: totalDurationValue,
       });
     } catch (error) {
       console.error("Error updating user stats in Firebase:", error);
@@ -398,9 +400,9 @@ const MyGym: React.FC = () => {
 
         await setDoc(doc(db, "activeCheckIns", userData.uid), {
           userId: userData.uid,
-          userName: userData.displayName,
+          userName: userData.displayName || "User",
           gymId: userData.gymId,
-          gymName: gym?.name,
+          gymName: gym?.name || "Unknown Gym",
           timeSlot: currentTimeSlot,
           checkInTime: serverTimestamp(),
           createdAt: serverTimestamp(),
@@ -462,20 +464,30 @@ const MyGym: React.FC = () => {
           currentTimeSlot = "Night";
         }
 
-        // Save PERMANENT record with LOCAL date
-        await addDoc(collection(db, "checkInHistory"), {
+        // FIXED: Ensure all required fields are saved
+        const checkInRecord = {
           userId: userData.uid,
-          userName: userData.displayName,
-          userEmail: userData.email,
+          userName: userData.displayName || "User",
+          userEmail: userData.email || "",
           gymId: userData.gymId,
-          gymName: gym?.name,
+          gymName: gym?.name || "Unknown Gym", // FIX: Ensure gymName is never undefined
           timeSlot: currentTimeSlot,
           date: dateKey, // LOCAL DATE - This is what streak calculation uses
           checkInTime: serverTimestamp(),
           checkOutTime: serverTimestamp(),
           duration: duration,
           createdAt: serverTimestamp(),
+        };
+
+        console.log("💾 Saving check-in record:", {
+          ...checkInRecord,
+          checkInTime: "serverTimestamp",
+          checkOutTime: "serverTimestamp",
+          createdAt: "serverTimestamp",
         });
+
+        // Save PERMANENT record with LOCAL date
+        await addDoc(collection(db, "checkInHistory"), checkInRecord);
 
         // NOW calculate streak AFTER the record is saved
         const newStreak = await calculateStreak();
@@ -491,8 +503,10 @@ const MyGym: React.FC = () => {
         if (gym?.id) {
           fetchActiveCheckInsCount(gym.id);
         }
+
+        console.log("✅ Check-out completed successfully!");
       } catch (error: any) {
-        console.error("Error during check-out:", error.message);
+        console.error("❌ Error during check-out:", error.message);
         Alert.alert(
           "Error",
           "Failed to save check-out record. Please try again.",
@@ -590,13 +604,13 @@ const MyGym: React.FC = () => {
     try {
       await addDoc(collection(db, "gymReports"), {
         gymId: gym?.id,
-        gymName: gym?.name,
+        gymName: gym?.name || "Unknown Gym",
         userId: userData?.uid,
-        userName: userData?.displayName,
-        userEmail: userData?.email,
+        userName: userData?.displayName || "User",
+        userEmail: userData?.email || "",
         issueTypes: selectedIssues,
         description: reportDescription,
-        status: "pending",
+        status: "pending" as ReportStatus,
         createdAt: serverTimestamp(),
       });
 

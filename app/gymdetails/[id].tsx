@@ -7,7 +7,6 @@ import {
   doc,
   getDoc,
   getDocs,
-  onSnapshot,
   query,
   serverTimestamp,
   updateDoc,
@@ -21,6 +20,7 @@ import {
   Dimensions,
   Modal,
   Platform,
+  RefreshControl,
   ScrollView,
   Share,
   StatusBar,
@@ -38,7 +38,6 @@ const isSmall = height < 700;
 
 // Time slot types
 type TimeSlot = "Morning" | "Evening" | "Night";
-type CrowdStatus = "Low" | "Medium" | "High" | "Very High";
 type PlanType = "monthly" | "3months" | "6months" | "12months";
 
 const GymDetails: React.FC = () => {
@@ -47,6 +46,7 @@ const GymDetails: React.FC = () => {
   const { userData, refreshUserData } = useAuth();
   const [gym, setGym] = useState<Gym | null>(null);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [timeSlotCounts, setTimeSlotCounts] = useState<
     Record<TimeSlot, number>
   >({
@@ -54,7 +54,7 @@ const GymDetails: React.FC = () => {
     Evening: 0,
     Night: 0,
   });
-  const [totalActiveMembers, setTotalActiveMembers] = useState(0);
+  const [totalEnrolledMembers, setTotalEnrolledMembers] = useState(0);
   const [userEnrollmentId, setUserEnrollmentId] = useState<string | null>(null);
 
   // Join modal states
@@ -69,10 +69,15 @@ const GymDetails: React.FC = () => {
   useEffect(() => {
     if (id) {
       fetchGymDetails();
-      setupTimeSlotListener();
+      fetchEnrolledMembers();
+    }
+  }, [id]);
+
+  useEffect(() => {
+    if (userData?.uid && id) {
       checkUserEnrollment();
     }
-  }, [id, userData]);
+  }, [userData?.uid, id]);
 
   const fetchGymDetails = async () => {
     try {
@@ -118,28 +123,51 @@ const GymDetails: React.FC = () => {
     }
   };
 
-  // Real-time listener for active check-ins by time slot
-  const setupTimeSlotListener = () => {
-    const q = query(collection(db, "activeCheckIns"), where("gymId", "==", id));
+  // Fetch enrolled members count by time slot
+  const fetchEnrolledMembers = async () => {
+    if (!id) return;
 
-    const unsubscribe = onSnapshot(q, (snapshot) => {
+    try {
+      const usersRef = collection(db, "users");
+      const q = query(
+        usersRef,
+        where("gymId", "==", id),
+        where("enrollmentStatus", "==", "approved"),
+      );
+
+      const querySnapshot = await getDocs(q);
       const counts = { Morning: 0, Evening: 0, Night: 0 };
       let total = 0;
 
-      snapshot.forEach((doc) => {
+      querySnapshot.forEach((doc) => {
         const data = doc.data();
         const timeSlot = data.timeSlot as TimeSlot;
-        if (timeSlot in counts) {
+
+        if (timeSlot && timeSlot in counts) {
           counts[timeSlot]++;
           total++;
         }
       });
 
       setTimeSlotCounts(counts);
-      setTotalActiveMembers(total);
-    });
+      setTotalEnrolledMembers(total);
+    } catch (error) {
+      console.error("Error fetching enrolled members:", error);
+      // Silently fail - just show 0 counts
+      setTimeSlotCounts({ Morning: 0, Evening: 0, Night: 0 });
+      setTotalEnrolledMembers(0);
+    }
+  };
 
-    return unsubscribe;
+  // Pull to refresh handler
+  const onRefresh = async () => {
+    setRefreshing(true);
+    await Promise.all([
+      fetchGymDetails(),
+      fetchEnrolledMembers(),
+      userData?.uid && id ? checkUserEnrollment() : Promise.resolve(),
+    ]);
+    setRefreshing(false);
   };
 
   // Cancel enrollment request
@@ -426,20 +454,6 @@ Terms & Conditions:
     }
   };
 
-  const getCrowdStatus = (
-    count: number,
-  ): { status: CrowdStatus; color: string; message: string } => {
-    if (count === 0)
-      return { status: "Low", color: "#10b981", message: "Very few members" };
-    if (count <= 10)
-      return { status: "Low", color: "#4ade80", message: "Not crowded" };
-    if (count <= 20)
-      return { status: "Medium", color: "#fbbf24", message: "Moderately busy" };
-    if (count <= 30)
-      return { status: "High", color: "#f97316", message: "Quite crowded" };
-    return { status: "Very High", color: "#ef4444", message: "Very crowded" };
-  };
-
   const copyToClipboard = (text: string, label: string) => {
     Clipboard.setString(text);
     Alert.alert("Copied!", `${label} copied to clipboard`);
@@ -514,36 +528,47 @@ Terms & Conditions:
     return "Join Now";
   };
 
+  const getTimeSlotIcon = (slot: TimeSlot) => {
+    switch (slot) {
+      case "Morning":
+        return "sunny-outline";
+      case "Evening":
+        return "partly-sunny-outline";
+      case "Night":
+        return "moon-outline";
+      default:
+        return "time-outline";
+    }
+  };
+
+  const getTimeSlotColor = (slot: TimeSlot) => {
+    switch (slot) {
+      case "Morning":
+        return "#fbbf24";
+      case "Evening":
+        return "#f97316";
+      case "Night":
+        return "#8b5cf6";
+      default:
+        return "#64748b";
+    }
+  };
+
   const renderTimeSlotInfo = (slot: TimeSlot) => {
     const count = timeSlotCounts[slot];
-    const crowdInfo = getCrowdStatus(count);
+    const color = getTimeSlotColor(slot);
 
     return (
       <View key={slot} style={styles.timeSlotCard}>
         <View style={styles.timeSlotHeader}>
           <View
-            style={[
-              styles.timeSlotIcon,
-              { backgroundColor: crowdInfo.color + "20" },
-            ]}
+            style={[styles.timeSlotIcon, { backgroundColor: color + "20" }]}
           >
-            <Ionicons
-              name={
-                slot === "Morning"
-                  ? "sunny"
-                  : slot === "Evening"
-                    ? "partly-sunny"
-                    : "moon"
-              }
-              size={18}
-              color={crowdInfo.color}
-            />
+            <Ionicons name={getTimeSlotIcon(slot)} size={20} color={color} />
           </View>
           <View style={styles.timeSlotInfo}>
             <Text style={styles.timeSlotTitle}>{slot}</Text>
-            <Text
-              style={[styles.timeSlotTime, { color: "#94a3b8", fontSize: 12 }]}
-            >
+            <Text style={styles.timeSlotTime}>
               {slot === "Morning"
                 ? "6 AM - 4 PM"
                 : slot === "Evening"
@@ -553,32 +578,34 @@ Terms & Conditions:
           </View>
         </View>
 
-        <View style={styles.crowdInfo}>
-          <Text style={styles.memberCountText}>{count} members</Text>
-          <View
-            style={[
-              styles.crowdBadge,
-              { backgroundColor: crowdInfo.color + "20" },
-            ]}
-          >
-            <View
-              style={[styles.crowdDot, { backgroundColor: crowdInfo.color }]}
-            />
-            <Text
-              style={[
-                styles.crowdText,
-                { color: crowdInfo.color, fontSize: 11 },
-              ]}
-            >
-              {crowdInfo.status}
-            </Text>
-          </View>
+        <View style={styles.memberCountBadge}>
+          <Ionicons name="people-outline" size={16} color={color} />
+          <Text style={[styles.memberCountText, { color }]}>
+            {count} {count === 1 ? "member" : "members"}
+          </Text>
         </View>
       </View>
     );
   };
 
   // Join Modal Components
+  const getPriceForPlan = (planType: PlanType) => {
+    if (!gym) return 0;
+
+    switch (planType) {
+      case "monthly":
+        return gym.monthlyFee;
+      case "3months":
+        return gym.quarterlyFee || gym.monthlyFee * 3;
+      case "6months":
+        return gym.annualFee ? gym.annualFee / 2 : gym.monthlyFee * 6;
+      case "12months":
+        return gym.annualFee || gym.monthlyFee * 12;
+      default:
+        return gym.monthlyFee;
+    }
+  };
+
   const renderPlanSelection = () => (
     <View style={styles.modalStepContent}>
       <Text style={styles.modalStepTitle}>Select Your Plan</Text>
@@ -601,7 +628,8 @@ Terms & Conditions:
             desc: "Best savings",
           },
         ].map((plan) => {
-          const price = calculatePrice();
+          const price = getPriceForPlan(plan.type);
+
           return (
             <TouchableOpacity
               key={plan.type}
@@ -662,27 +690,23 @@ Terms & Conditions:
             ]}
             onPress={() => setSelectedTimeSlot(slot)}
           >
-            <View style={styles.timeSlotIcon}>
+            <View style={styles.timeSlotModalIcon}>
               <Ionicons
-                name={
-                  slot === "Morning"
-                    ? "sunny"
-                    : slot === "Evening"
-                      ? "partly-sunny"
-                      : "moon"
-                }
+                name={getTimeSlotIcon(slot)}
                 size={24}
                 color={selectedTimeSlot === slot ? "#4ade80" : "#64748b"}
               />
             </View>
-            <Text style={styles.timeSlotName}>{slot}</Text>
-            <Text style={styles.timeSlotHours}>
-              {slot === "Morning"
-                ? "6 AM - 4 PM"
-                : slot === "Evening"
-                  ? "4 PM - 9 PM"
-                  : "9 PM - 6 AM"}
-            </Text>
+            <View style={styles.timeSlotModalInfo}>
+              <Text style={styles.timeSlotModalName}>{slot}</Text>
+              <Text style={styles.timeSlotHours}>
+                {slot === "Morning"
+                  ? "6 AM - 4 PM"
+                  : slot === "Evening"
+                    ? "4 PM - 9 PM"
+                    : "9 PM - 6 AM"}
+              </Text>
+            </View>
           </TouchableOpacity>
         ))}
       </View>
@@ -774,6 +798,14 @@ Terms & Conditions:
       <ScrollView
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            tintColor="#4ade80"
+            colors={["#4ade80"]}
+          />
+        }
       >
         {/* Gym Hero */}
         <View style={styles.heroCard}>
@@ -792,16 +824,20 @@ Terms & Conditions:
           )}
         </View>
 
-        {/* Live Status Banner */}
+        {/* Enrolled Members Banner */}
         <View style={styles.liveStatusCard}>
           <View style={styles.liveStatusHeader}>
             <View style={styles.liveIndicator}>
               <View style={styles.liveDot} />
-              <Text style={styles.liveText}>LIVE</Text>
+              <Text style={styles.liveText}>Total Enrolled</Text>
             </View>
-            <Text style={styles.totalMembersText}>
-              {totalActiveMembers} members currently active
-            </Text>
+            <View style={styles.totalMembersContainer}>
+              <Ionicons name="people" size={16} color="#4ade80" />
+              <Text style={styles.totalMembersText}>
+                {totalEnrolledMembers}{" "}
+                {totalEnrolledMembers === 1 ? "member" : "members"}
+              </Text>
+            </View>
           </View>
         </View>
 
@@ -893,9 +929,9 @@ Terms & Conditions:
           </View>
         </View>
 
-        {/* Time Slots Crowd Info */}
+        {/* Enrolled Members by Time Slot */}
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Live Time Slot Crowd</Text>
+          <Text style={styles.sectionTitle}>Enrolled Members by Time Slot</Text>
           <View style={styles.timeSlotsContainer}>
             {(["Morning", "Evening", "Night"] as TimeSlot[]).map(
               renderTimeSlotInfo,
@@ -1251,10 +1287,10 @@ const styles = StyleSheet.create({
   liveStatusCard: {
     backgroundColor: "rgba(15, 23, 42, 0.8)",
     borderRadius: 12,
-    padding: 12,
+    padding: 14,
     marginBottom: 16,
     borderWidth: 1,
-    borderColor: "rgba(59, 130, 246, 0.3)",
+    borderColor: "rgba(74, 222, 128, 0.3)",
   },
   liveStatusHeader: {
     flexDirection: "row",
@@ -1264,26 +1300,31 @@ const styles = StyleSheet.create({
   liveIndicator: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 4,
-    backgroundColor: "rgba(239, 68, 68, 0.15)",
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: 10,
+    gap: 6,
   },
   liveDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-    backgroundColor: "#ef4444",
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: "#4ade80",
   },
   liveText: {
-    fontSize: 10,
-    fontWeight: "700",
-    color: "#ef4444",
+    fontSize: 13,
+    fontWeight: "600",
+    color: "#4ade80",
+  },
+  totalMembersContainer: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    backgroundColor: "rgba(74, 222, 128, 0.1)",
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 12,
   },
   totalMembersText: {
-    fontSize: 12,
-    color: "#e9eef7",
+    fontSize: 13,
+    color: "#4ade80",
     fontWeight: "600",
   },
   statusBanner: {
@@ -1395,16 +1436,19 @@ const styles = StyleSheet.create({
     padding: 16,
     borderWidth: 1,
     borderColor: "rgba(255,255,255,0.06)",
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
   },
   timeSlotHeader: {
     flexDirection: "row",
     alignItems: "center",
     gap: 12,
-    marginBottom: 10,
+    flex: 1,
   },
   timeSlotIcon: {
-    width: 40,
-    height: 40,
+    width: 44,
+    height: 44,
     borderRadius: 12,
     alignItems: "center",
     justifyContent: "center",
@@ -1413,38 +1457,26 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   timeSlotTitle: {
-    fontSize: 15,
+    fontSize: 16,
     fontWeight: "600",
     color: "#e9eef7",
   },
   timeSlotTime: {
-    fontSize: 12,
+    fontSize: 13,
+    color: "#94a3b8",
     marginTop: 2,
   },
-  crowdInfo: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-  },
-  memberCountText: {
-    fontSize: 14,
-    color: "#64748b",
-    fontWeight: "500",
-  },
-  crowdBadge: {
+  memberCountBadge: {
     flexDirection: "row",
     alignItems: "center",
     gap: 6,
-    paddingHorizontal: 10,
-    paddingVertical: 4,
+    backgroundColor: "rgba(255,255,255,0.05)",
+    paddingHorizontal: 12,
+    paddingVertical: 8,
     borderRadius: 12,
   },
-  crowdDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-  },
-  crowdText: {
+  memberCountText: {
+    fontSize: 14,
     fontWeight: "600",
   },
   minimalPlansContainer: {
@@ -1687,16 +1719,27 @@ const styles = StyleSheet.create({
     borderColor: "#4ade80",
     backgroundColor: "rgba(74, 222, 128, 0.1)",
   },
-  timeSlotName: {
+  timeSlotModalIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: 12,
+    backgroundColor: "rgba(255,255,255,0.05)",
+    alignItems: "center",
+    justifyContent: "center",
+    marginRight: 12,
+  },
+  timeSlotModalInfo: {
+    flex: 1,
+  },
+  timeSlotModalName: {
     fontSize: 16,
     fontWeight: "600",
     color: "#e9eef7",
-    flex: 1,
   },
   timeSlotHours: {
     fontSize: 13,
-    color: "#64748b",
-    marginRight: 12,
+    color: "#94a3b8",
+    marginTop: 2,
   },
   summaryCard: {
     backgroundColor: "rgba(15, 23, 42, 0.8)",

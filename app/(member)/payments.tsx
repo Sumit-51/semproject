@@ -1,10 +1,16 @@
+import { Ionicons } from "@expo/vector-icons";
 import {
   addDoc,
   collection,
+  deleteDoc,
   doc,
   getDoc,
+  getDocs,
+  limit,
   onSnapshot,
+  orderBy,
   query,
+  serverTimestamp,
   where,
 } from "firebase/firestore";
 import React, { useEffect, useState } from "react";
@@ -12,6 +18,7 @@ import {
   ActivityIndicator,
   Alert,
   Modal,
+  RefreshControl,
   ScrollView,
   StatusBar,
   StyleSheet,
@@ -23,24 +30,40 @@ import { useAuth } from "../context/AuthContext";
 import { db } from "../lib/firebase";
 import { Gym, PlanChangeRequest } from "../types";
 
+interface PaymentHistory {
+  id: string;
+  userId: string;
+  gymId: string;
+  planDuration: number;
+  amount: number;
+  paymentDate: Date;
+  paymentMethod: string;
+  transactionId?: string;
+}
+
 const Payments: React.FC = () => {
   const { userData, refreshUserData } = useAuth();
   const [currentTimeSlot, setCurrentTimeSlot] =
     useState<string>("Not Assigned");
   const [gymData, setGymData] = useState<Gym | null>(null);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [modalVisible, setModalVisible] = useState(false);
   const [updating, setUpdating] = useState(false);
   const [updateError, setUpdateError] = useState<string | null>(null);
   const [latestRequest, setLatestRequest] = useState<PlanChangeRequest | null>(
     null,
   );
+  const [paymentHistory, setPaymentHistory] = useState<PaymentHistory[]>([]);
+  const [showHistoryModal, setShowHistoryModal] = useState(false);
 
   const status = userData?.enrollmentStatus ?? "none";
-  const enrolledAt = userData?.enrolledAt ?? null;
+  // ⭐ FIXED: Only get enrolledAt if status is approved
+  const enrolledAt =
+    userData?.enrollmentStatus === "approved" ? userData?.enrolledAt : null;
   const currentDuration = userData?.planDuration ?? 1;
 
-  // Create a simpler query that doesn't need the index
+  // Listen to plan change requests
   useEffect(() => {
     if (!userData?.uid) return;
 
@@ -57,7 +80,6 @@ const Payments: React.FC = () => {
           const sortedDocs = snapshot.docs.sort((a, b) => {
             const aData = a.data();
             const bData = b.data();
-            // Handle both Firestore timestamp and Date formats
             const getTimestamp = (data: any) => {
               if (data.createdAt?.seconds) return data.createdAt.seconds;
               if (data.createdAt?.toDate)
@@ -68,12 +90,13 @@ const Payments: React.FC = () => {
             };
             const aTime = getTimestamp(aData);
             const bTime = getTimestamp(bData);
-            return bTime - aTime; // Descending
+            return bTime - aTime;
           });
 
           const latest = sortedDocs[0];
           const data = latest.data();
 
+          // If request was just approved, refresh user data
           if (
             data.status === "approved" &&
             latestRequest?.status !== "approved"
@@ -81,7 +104,6 @@ const Payments: React.FC = () => {
             refreshUserData();
           }
 
-          // Create the PlanChangeRequest object with all required fields
           const requestData: PlanChangeRequest = {
             id: latest.id,
             userId: data.userId,
@@ -150,6 +172,46 @@ const Payments: React.FC = () => {
     fetchGym();
   }, [userData?.gymId]);
 
+  // Fetch payment history
+  useEffect(() => {
+    const fetchPaymentHistory = async () => {
+      if (!userData?.uid) return;
+
+      try {
+        const paymentsRef = collection(db, "paymentHistory");
+        const q = query(
+          paymentsRef,
+          where("userId", "==", userData.uid),
+          orderBy("paymentDate", "desc"),
+          limit(10),
+        );
+
+        const querySnapshot = await getDocs(q);
+        const history: PaymentHistory[] = [];
+
+        querySnapshot.forEach((doc) => {
+          const data = doc.data();
+          history.push({
+            id: doc.id,
+            userId: data.userId,
+            gymId: data.gymId,
+            planDuration: data.planDuration,
+            amount: data.amount,
+            paymentDate: data.paymentDate?.toDate() || new Date(),
+            paymentMethod: data.paymentMethod || "offline",
+            transactionId: data.transactionId,
+          });
+        });
+
+        setPaymentHistory(history);
+      } catch (error) {
+        console.error("Error fetching payment history:", error);
+      }
+    };
+
+    fetchPaymentHistory();
+  }, [userData?.uid]);
+
   // Fetch time slot
   useEffect(() => {
     if (userData?.timeSlot) {
@@ -157,13 +219,21 @@ const Payments: React.FC = () => {
     }
   }, [userData?.timeSlot]);
 
+  const onRefresh = async () => {
+    setRefreshing(true);
+    await refreshUserData();
+    setRefreshing(false);
+  };
+
+  // ⭐ FIXED: Check if enrolledAt exists before calculating
   const getExpiryDate = (duration: number) => {
-    if (!enrolledAt) return "N/A";
+    if (!enrolledAt) return "Not enrolled yet";
     const newExpiry = new Date(enrolledAt);
     newExpiry.setMonth(newExpiry.getMonth() + duration);
     return newExpiry.toDateString();
   };
 
+  // ⭐ FIXED: Check if enrolledAt exists before calculating
   const getDaysLeft = (duration: number) => {
     if (!enrolledAt) return 0;
     const expiryDate = new Date(enrolledAt);
@@ -207,40 +277,92 @@ const Payments: React.FC = () => {
     if (latestRequest?.status === "pending") {
       Alert.alert(
         "Request Pending",
-        "You already have a pending request. Wait for admin approval.",
+        "You already have a pending request. Wait for admin approval or cancel it first.",
       );
       return;
     }
 
-    setUpdating(true);
-    setUpdateError(null);
-    try {
-      await addDoc(collection(db, "planChangeRequests"), {
-        userId: userData.uid,
-        gymId: userData.gymId,
-        currentDuration: currentDuration,
-        requestedDuration: newDuration,
-        status: "pending",
-        createdAt: new Date(),
-        reviewedAt: null,
-        reviewedBy: null,
-        // These fields are for admin reference but not in the PlanChangeRequest type
-        userName: userData.displayName,
-        userEmail: userData.email,
-        gymName: gymData?.name,
-      });
+    const selectedPlan = allPlans.find((p) => p.months === newDuration);
 
-      setModalVisible(false);
-      Alert.alert(
-        "Request Sent",
-        "Your plan change request has been sent to the admin for approval.",
-      );
-    } catch (e: any) {
-      console.error("Failed to submit plan change request:", e);
-      Alert.alert("Error", "Failed to submit request. Please try again.");
-    } finally {
-      setUpdating(false);
-    }
+    // Show confirmation dialog
+    Alert.alert(
+      "Confirm Plan Change",
+      `Do you want to change your plan to ${selectedPlan?.label}?\n\nAmount: ₹${selectedPlan?.fee}\n\nNote: This request will be sent to the gym admin for approval.`,
+      [
+        {
+          text: "Cancel",
+          style: "cancel",
+        },
+        {
+          text: "Confirm",
+          onPress: async () => {
+            setUpdating(true);
+            setUpdateError(null);
+            try {
+              await addDoc(collection(db, "planChangeRequests"), {
+                userId: userData.uid,
+                gymId: userData.gymId,
+                currentDuration: currentDuration,
+                requestedDuration: newDuration,
+                status: "pending",
+                createdAt: serverTimestamp(),
+                reviewedAt: null,
+                reviewedBy: null,
+                userName: userData.displayName,
+                userEmail: userData.email,
+                gymName: gymData?.name,
+              });
+
+              setModalVisible(false);
+              Alert.alert(
+                "Request Sent ✅",
+                "Your plan change request has been sent to the admin for approval.",
+              );
+            } catch (e: any) {
+              console.error("Failed to submit plan change request:", e);
+              Alert.alert(
+                "Error",
+                "Failed to submit request. Please try again.",
+              );
+            } finally {
+              setUpdating(false);
+            }
+          },
+        },
+      ],
+    );
+  };
+
+  const handleCancelRequest = () => {
+    if (!latestRequest) return;
+
+    Alert.alert(
+      "Cancel Request",
+      "Are you sure you want to cancel your plan change request?",
+      [
+        {
+          text: "No",
+          style: "cancel",
+        },
+        {
+          text: "Yes, Cancel",
+          style: "destructive",
+          onPress: async () => {
+            try {
+              await deleteDoc(doc(db, "planChangeRequests", latestRequest.id));
+              setLatestRequest(null);
+              Alert.alert("Success", "Request cancelled successfully");
+            } catch (error) {
+              console.error("Error cancelling request:", error);
+              Alert.alert(
+                "Error",
+                "Failed to cancel request. Please try again.",
+              );
+            }
+          },
+        },
+      ],
+    );
   };
 
   if (loading) {
@@ -265,9 +387,18 @@ const Payments: React.FC = () => {
         style={styles.scrollView}
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            tintColor="#4ade80"
+            colors={["#4ade80"]}
+          />
+        }
       >
         {status === "none" || !gymData ? (
           <View style={styles.emptyContainer}>
+            <Ionicons name="card-outline" size={64} color="#64748b" />
             <Text style={styles.emptyTitle}>No Active Membership</Text>
             <Text style={styles.emptySubtitle}>
               Join a gym to see your membership details here.
@@ -302,33 +433,58 @@ const Payments: React.FC = () => {
                 </Text>
               </View>
 
-              <View style={styles.detailsGrid}>
-                <View style={styles.detailItem}>
-                  <Text style={styles.detailLabel}>Enrolled</Text>
-                  <Text style={styles.detailValue}>
-                    {enrolledAt?.toDateString() ?? "N/A"}
+              {/* ⭐ FIXED: Show different content based on enrollment status */}
+              {status === "approved" && enrolledAt ? (
+                <View style={styles.detailsGrid}>
+                  <View style={styles.detailItem}>
+                    <Text style={styles.detailLabel}>Enrolled</Text>
+                    <Text style={styles.detailValue}>
+                      {enrolledAt.toDateString()}
+                    </Text>
+                  </View>
+                  <View style={styles.detailItem}>
+                    <Text style={styles.detailLabel}>Expires</Text>
+                    <Text style={styles.detailValue}>{expiryDate}</Text>
+                  </View>
+                  <View style={styles.detailItem}>
+                    <Text style={styles.detailLabel}>Days Left</Text>
+                    <Text
+                      style={[
+                        styles.detailValue,
+                        daysLeft <= 7 && styles.detailValueWarning,
+                      ]}
+                    >
+                      {daysLeft}d
+                    </Text>
+                  </View>
+                  <View style={styles.detailItem}>
+                    <Text style={styles.detailLabel}>Time Slot</Text>
+                    <Text style={styles.detailValue}>{currentTimeSlot}</Text>
+                  </View>
+                </View>
+              ) : (
+                <View style={styles.pendingContainer}>
+                  <Ionicons
+                    name={
+                      status === "pending"
+                        ? "time-outline"
+                        : "information-circle"
+                    }
+                    size={40}
+                    color="#64748b"
+                  />
+                  <Text style={styles.pendingText}>
+                    {status === "pending"
+                      ? "Your enrollment is pending admin approval"
+                      : "You are not enrolled in any gym"}
                   </Text>
+                  {status === "pending" && (
+                    <Text style={styles.pendingSubtext}>
+                      Your enrollment date will be set once approved
+                    </Text>
+                  )}
                 </View>
-                <View style={styles.detailItem}>
-                  <Text style={styles.detailLabel}>Expires</Text>
-                  <Text style={styles.detailValue}>{expiryDate}</Text>
-                </View>
-                <View style={styles.detailItem}>
-                  <Text style={styles.detailLabel}>Days Left</Text>
-                  <Text
-                    style={[
-                      styles.detailValue,
-                      daysLeft <= 7 && styles.detailValueWarning,
-                    ]}
-                  >
-                    {daysLeft}d
-                  </Text>
-                </View>
-                <View style={styles.detailItem}>
-                  <Text style={styles.detailLabel}>Time Slot</Text>
-                  <Text style={styles.detailValue}>{currentTimeSlot}</Text>
-                </View>
-              </View>
+              )}
             </View>
 
             {/* Request Status Banner */}
@@ -346,13 +502,23 @@ const Payments: React.FC = () => {
               >
                 <View style={styles.requestBannerRow}>
                   <View style={styles.requestBannerIcon}>
-                    <Text style={styles.requestBannerDot}>
-                      {latestRequest.status === "pending"
-                        ? "⏳"
-                        : latestRequest.status === "approved"
-                          ? "✓"
-                          : "✕"}
-                    </Text>
+                    <Ionicons
+                      name={
+                        latestRequest.status === "pending"
+                          ? "time-outline"
+                          : latestRequest.status === "approved"
+                            ? "checkmark-circle"
+                            : "close-circle"
+                      }
+                      size={24}
+                      color={
+                        latestRequest.status === "pending"
+                          ? "#fbbf24"
+                          : latestRequest.status === "approved"
+                            ? "#4ade80"
+                            : "#f87171"
+                      }
+                    />
                   </View>
                   <View style={styles.requestBannerContent}>
                     <Text style={styles.requestBannerTitle}>
@@ -378,27 +544,53 @@ const Payments: React.FC = () => {
                       )}
                   </View>
                 </View>
+                {latestRequest.status === "pending" && (
+                  <TouchableOpacity
+                    style={styles.cancelRequestBtn}
+                    onPress={handleCancelRequest}
+                  >
+                    <Ionicons
+                      name="close-circle-outline"
+                      size={18}
+                      color="#f87171"
+                    />
+                    <Text style={styles.cancelRequestText}>Cancel Request</Text>
+                  </TouchableOpacity>
+                )}
               </View>
             )}
 
-            {/* Change Plan Button */}
-            {status === "approved" && (
-              <TouchableOpacity
-                style={[
-                  styles.changeBtn,
-                  latestRequest?.status === "pending" &&
-                    styles.changeBtnDisabled,
-                ]}
-                onPress={() => setModalVisible(true)}
-                disabled={latestRequest?.status === "pending"}
-              >
-                <Text style={styles.changeBtnText}>
-                  {latestRequest?.status === "pending"
-                    ? "Request Pending..."
-                    : "Change Plan"}
-                </Text>
-              </TouchableOpacity>
-            )}
+            {/* Action Buttons */}
+            <View style={styles.actionButtons}>
+              {status === "approved" && (
+                <TouchableOpacity
+                  style={[
+                    styles.changeBtn,
+                    latestRequest?.status === "pending" &&
+                      styles.changeBtnDisabled,
+                  ]}
+                  onPress={() => setModalVisible(true)}
+                  disabled={latestRequest?.status === "pending"}
+                >
+                  <Ionicons name="swap-horizontal" size={20} color="#0a0f1a" />
+                  <Text style={styles.changeBtnText}>
+                    {latestRequest?.status === "pending"
+                      ? "Request Pending..."
+                      : "Change Plan"}
+                  </Text>
+                </TouchableOpacity>
+              )}
+
+              {paymentHistory.length > 0 && (
+                <TouchableOpacity
+                  style={styles.historyBtn}
+                  onPress={() => setShowHistoryModal(true)}
+                >
+                  <Ionicons name="receipt-outline" size={20} color="#4ade80" />
+                  <Text style={styles.historyBtnText}>Payment History</Text>
+                </TouchableOpacity>
+              )}
+            </View>
           </>
         )}
       </ScrollView>
@@ -415,7 +607,7 @@ const Payments: React.FC = () => {
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>Change Your Plan</Text>
               <TouchableOpacity onPress={() => setModalVisible(false)}>
-                <Text style={styles.modalClose}>✕</Text>
+                <Ionicons name="close" size={28} color="#e9eef7" />
               </TouchableOpacity>
             </View>
 
@@ -437,15 +629,26 @@ const Payments: React.FC = () => {
                   disabled={updating || isCurrent}
                 >
                   <View style={styles.planOptionLeft}>
-                    <Text style={styles.planOptionLabel}>{plan.label}</Text>
-                    <Text style={styles.planOptionFee}>
-                      ₹{plan.fee.toFixed(0)}
-                    </Text>
+                    <Ionicons
+                      name="calendar-outline"
+                      size={20}
+                      color={isCurrent ? "#4ade80" : "#64748b"}
+                    />
+                    <View>
+                      <Text style={styles.planOptionLabel}>{plan.label}</Text>
+                      <Text style={styles.planOptionFee}>
+                        ₹{plan.fee.toFixed(0)}
+                      </Text>
+                    </View>
                   </View>
                   {isCurrent ? (
                     <Text style={styles.planOptionCurrentBadge}>Current</Text>
                   ) : (
-                    <Text style={styles.planOptionArrow}>›</Text>
+                    <Ionicons
+                      name="chevron-forward"
+                      size={20}
+                      color="#64748b"
+                    />
                   )}
                 </TouchableOpacity>
               );
@@ -466,6 +669,78 @@ const Payments: React.FC = () => {
               onPress={() => setModalVisible(false)}
             >
               <Text style={styles.modalCloseBtnText}>Cancel</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Payment History Modal */}
+      <Modal
+        visible={showHistoryModal}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setShowHistoryModal(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Payment History</Text>
+              <TouchableOpacity onPress={() => setShowHistoryModal(false)}>
+                <Ionicons name="close" size={28} color="#e9eef7" />
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView style={styles.historyScroll}>
+              {paymentHistory.length === 0 ? (
+                <View style={styles.emptyHistory}>
+                  <Ionicons name="receipt-outline" size={48} color="#64748b" />
+                  <Text style={styles.emptyHistoryText}>
+                    No payment history yet
+                  </Text>
+                </View>
+              ) : (
+                paymentHistory.map((payment, index) => (
+                  <View key={payment.id} style={styles.historyItem}>
+                    <View style={styles.historyItemHeader}>
+                      <View style={styles.historyItemIcon}>
+                        <Ionicons
+                          name="checkmark-circle"
+                          size={20}
+                          color="#4ade80"
+                        />
+                      </View>
+                      <View style={styles.historyItemContent}>
+                        <Text style={styles.historyItemTitle}>
+                          {payment.planDuration}{" "}
+                          {payment.planDuration === 1 ? "Month" : "Months"} Plan
+                        </Text>
+                        <Text style={styles.historyItemDate}>
+                          {payment.paymentDate.toLocaleDateString("en-US", {
+                            year: "numeric",
+                            month: "short",
+                            day: "numeric",
+                          })}
+                        </Text>
+                      </View>
+                      <Text style={styles.historyItemAmount}>
+                        ₹{payment.amount}
+                      </Text>
+                    </View>
+                    {payment.transactionId && (
+                      <Text style={styles.historyItemTransaction}>
+                        ID: {payment.transactionId}
+                      </Text>
+                    )}
+                  </View>
+                ))
+              )}
+            </ScrollView>
+
+            <TouchableOpacity
+              style={styles.modalCloseBtn}
+              onPress={() => setShowHistoryModal(false)}
+            >
+              <Text style={styles.modalCloseBtnText}>Close</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -512,7 +787,7 @@ const styles = StyleSheet.create({
   emptyContainer: {
     backgroundColor: "rgba(15, 23, 42, 0.8)",
     borderRadius: 20,
-    padding: 24,
+    padding: 40,
     alignItems: "center",
     marginTop: 20,
   },
@@ -520,6 +795,7 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: "600",
     color: "#e9eef7",
+    marginTop: 16,
     marginBottom: 8,
   },
   emptySubtitle: {
@@ -611,6 +887,28 @@ const styles = StyleSheet.create({
   detailValueWarning: {
     color: "#f97316",
   },
+  // ⭐ ADDED: Pending container styles
+  pendingContainer: {
+    alignItems: "center",
+    paddingVertical: 30,
+    backgroundColor: "rgba(255,255,255,0.04)",
+    borderRadius: 12,
+    marginTop: 10,
+    marginBottom: 20,
+  },
+  pendingText: {
+    fontSize: 15,
+    color: "#e9eef7",
+    textAlign: "center",
+    marginTop: 12,
+    fontWeight: "600",
+  },
+  pendingSubtext: {
+    fontSize: 13,
+    color: "#64748b",
+    textAlign: "center",
+    marginTop: 6,
+  },
   requestBanner: {
     borderRadius: 16,
     padding: 16,
@@ -633,12 +931,10 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "flex-start",
     gap: 12,
+    marginBottom: 12,
   },
   requestBannerIcon: {
     marginTop: 2,
-  },
-  requestBannerDot: {
-    fontSize: 20,
   },
   requestBannerContent: {
     flex: 1,
@@ -660,13 +956,33 @@ const styles = StyleSheet.create({
     marginTop: 4,
     fontStyle: "italic",
   },
+  cancelRequestBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    alignSelf: "flex-start",
+    backgroundColor: "rgba(248, 113, 113, 0.1)",
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 8,
+  },
+  cancelRequestText: {
+    fontSize: 13,
+    fontWeight: "600",
+    color: "#f87171",
+  },
+  actionButtons: {
+    gap: 12,
+  },
   changeBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
     backgroundColor: "#4ade80",
     borderRadius: 14,
     paddingVertical: 16,
     paddingHorizontal: 24,
-    alignItems: "center",
-    marginBottom: 20,
   },
   changeBtnDisabled: {
     backgroundColor: "rgba(74, 222, 128, 0.35)",
@@ -677,9 +993,26 @@ const styles = StyleSheet.create({
     fontWeight: "700",
     color: "#0a0f1a",
   },
+  historyBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    backgroundColor: "rgba(74, 222, 128, 0.1)",
+    borderRadius: 14,
+    paddingVertical: 16,
+    paddingHorizontal: 24,
+    borderWidth: 1,
+    borderColor: "rgba(74, 222, 128, 0.3)",
+  },
+  historyBtnText: {
+    fontSize: 16,
+    fontWeight: "600",
+    color: "#4ade80",
+  },
   modalOverlay: {
     flex: 1,
-    backgroundColor: "rgba(0,0,0,0.6)",
+    backgroundColor: "rgba(0,0,0,0.7)",
     justifyContent: "flex-end",
   },
   modalContent: {
@@ -688,6 +1021,7 @@ const styles = StyleSheet.create({
     borderTopRightRadius: 24,
     padding: 24,
     paddingBottom: 40,
+    maxHeight: "80%",
   },
   modalHeader: {
     flexDirection: "row",
@@ -699,11 +1033,6 @@ const styles = StyleSheet.create({
     fontSize: 20,
     fontWeight: "700",
     color: "#e9eef7",
-  },
-  modalClose: {
-    fontSize: 24,
-    color: "#64748b",
-    padding: 4,
   },
   modalSubtitle: {
     fontSize: 14,
@@ -717,8 +1046,8 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(255,255,255,0.05)",
     borderRadius: 12,
     paddingHorizontal: 16,
-    paddingVertical: 14,
-    marginBottom: 8,
+    paddingVertical: 16,
+    marginBottom: 10,
     borderWidth: 1,
     borderColor: "rgba(255,255,255,0.08)",
   },
@@ -733,13 +1062,10 @@ const styles = StyleSheet.create({
     color: "#e9eef7",
   },
   planOptionFee: {
-    fontSize: 14,
+    fontSize: 13,
     color: "#4ade80",
     fontWeight: "600",
-  },
-  planOptionArrow: {
-    fontSize: 24,
-    color: "#64748b",
+    marginTop: 2,
   },
   planOptionCurrent: {
     borderColor: "rgba(74, 222, 128, 0.4)",
@@ -750,8 +1076,8 @@ const styles = StyleSheet.create({
     fontWeight: "600",
     color: "#4ade80",
     backgroundColor: "rgba(74, 222, 128, 0.15)",
-    paddingHorizontal: 8,
-    paddingVertical: 4,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
     borderRadius: 8,
   },
   errorText: {
@@ -771,5 +1097,63 @@ const styles = StyleSheet.create({
   modalCloseBtnText: {
     fontSize: 16,
     color: "#64748b",
+    fontWeight: "600",
+  },
+  historyScroll: {
+    maxHeight: 400,
+  },
+  emptyHistory: {
+    alignItems: "center",
+    paddingVertical: 40,
+  },
+  emptyHistoryText: {
+    fontSize: 14,
+    color: "#64748b",
+    marginTop: 12,
+  },
+  historyItem: {
+    backgroundColor: "rgba(255,255,255,0.05)",
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.08)",
+  },
+  historyItemHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+  },
+  historyItemIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: "rgba(74, 222, 128, 0.1)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  historyItemContent: {
+    flex: 1,
+  },
+  historyItemTitle: {
+    fontSize: 15,
+    fontWeight: "600",
+    color: "#e9eef7",
+  },
+  historyItemDate: {
+    fontSize: 12,
+    color: "#64748b",
+    marginTop: 2,
+  },
+  historyItemAmount: {
+    fontSize: 16,
+    fontWeight: "700",
+    color: "#4ade80",
+  },
+  historyItemTransaction: {
+    fontSize: 11,
+    color: "#64748b",
+    marginTop: 8,
+    fontFamily: "monospace",
   },
 });

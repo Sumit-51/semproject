@@ -117,7 +117,7 @@ const ActivityLog: React.FC = () => {
     );
   };
 
-  const loadCheckInHistory = async () => {
+  const loadCheckInHistory = useCallback(async () => {
     if (unsubscribeRef.current) {
       unsubscribeRef.current();
       unsubscribeRef.current = null;
@@ -160,6 +160,8 @@ const ActivityLog: React.FC = () => {
         limit(100),
       );
 
+      console.log("📊 Loading check-in history for user:", userData.uid);
+
       const unsubscribe = onSnapshot(
         q,
         (querySnapshot) => {
@@ -168,9 +170,12 @@ const ActivityLog: React.FC = () => {
             const data = doc.data();
 
             let dateString = "";
-            if (data.date) {
+            if (data.date && typeof data.date === "string") {
+              // Use the date field if it exists (from MyGym's fixed code)
               dateString = data.date;
+              console.log("📅 Using stored date field:", dateString);
             } else if (data.checkOutTime) {
+              // Fallback: calculate from checkOutTime
               const checkOutDate = data.checkOutTime.toDate();
               // Use LOCAL date
               const localDate = new Date(
@@ -179,64 +184,88 @@ const ActivityLog: React.FC = () => {
                 checkOutDate.getDate(),
               );
               dateString = `${localDate.getFullYear()}-${String(localDate.getMonth() + 1).padStart(2, "0")}-${String(localDate.getDate()).padStart(2, "0")}`;
+              console.log("🕒 Calculated date from checkOutTime:", dateString);
             }
 
-            history.push({
+            const record = {
               id: doc.id,
               date: dateString,
               duration: data.duration || 0,
               checkInTime: data.checkInTime?.toDate() || new Date(),
               checkOutTime: data.checkOutTime?.toDate() || new Date(),
-              gymName: data.gymName || "Unknown Gym",
+              gymName: data.gymName || "My Gym",
+            };
+
+            console.log("📝 Check-in record loaded:", {
+              id: doc.id.substring(0, 8),
+              date: record.date,
+              gymName: record.gymName,
+              duration: record.duration,
             });
+
+            history.push(record);
           });
 
+          console.log(`✅ Loaded ${history.length} check-in records`);
           setCheckInHistory(history);
           setDailySessions(combineDailySessions(history));
           setLoading(false);
         },
         (firestoreError: any) => {
+          console.error("❌ Firestore listener error:", {
+            code: firestoreError.code,
+            message: firestoreError.message,
+          });
+
           if (firestoreError.code === "permission-denied") {
             setCheckInHistory([]);
             setDailySessions([]);
-            setError("Please log in to view your activity history");
+            setError("Permission denied. Please contact support.");
             setLoading(false);
             return;
           }
 
-          console.error("Firestore listener error:", firestoreError);
-          setError("Failed to load activity history");
+          if (firestoreError.code === "failed-precondition") {
+            // Missing index error
+            setError("Database index is being created. Please try again in a moment.");
+            setLoading(false);
+            return;
+          }
+
+          setError("Failed to load activity history. Please try again.");
           setLoading(false);
         },
       );
 
       unsubscribeRef.current = unsubscribe;
-    } catch (error) {
-      console.error("Error in loadCheckInHistory:", error);
+    } catch (error: any) {
+      console.error("❌ Error in loadCheckInHistory:", error);
+      setError(error.message || "Failed to load activity history");
       setLoading(false);
     }
-  };
+  }, [userData?.uid, userData?.gymId, userData?.enrollmentStatus]);
 
   useFocusEffect(
     useCallback(() => {
+      console.log("🔍 ActivityLog page focused, loading history...");
       loadCheckInHistory();
 
       return () => {
         if (unsubscribeRef.current) {
+          console.log("🔌 Unsubscribing from Firestore listener");
           unsubscribeRef.current();
           unsubscribeRef.current = null;
         }
       };
-    }, [userData?.uid, userData?.gymId, userData?.enrollmentStatus]),
+    }, [loadCheckInHistory]),
   );
 
   useEffect(() => {
+    // Additional load when month changes
     loadCheckInHistory();
   }, [
     currentMonth,
-    userData?.uid,
-    userData?.gymId,
-    userData?.enrollmentStatus,
+    loadCheckInHistory,
   ]);
 
   const getDaysInMonth = (date: Date) => {
@@ -267,20 +296,41 @@ const ActivityLog: React.FC = () => {
     );
   };
 
+  // FIXED: Proper timezone handling for future date check
   const isFutureDate = (day: number) => {
+    const today = new Date();
+    const todayStart = new Date(
+      today.getFullYear(),
+      today.getMonth(),
+      today.getDate(),
+    );
+    
     const checkDate = new Date(
       currentMonth.getFullYear(),
       currentMonth.getMonth(),
       day,
     );
-    return checkDate > new Date();
+    
+    return checkDate > todayStart;
   };
 
   const getCheckInForDay = (day: number) => {
     const dateKey = formatDateKey(
       new Date(currentMonth.getFullYear(), currentMonth.getMonth(), day),
     );
-    return checkInHistory.some((record) => record.date === dateKey);
+    const hasCheckIn = checkInHistory.some((record) => {
+      const match = record.date === dateKey;
+      if (match) {
+        console.log(`✅ Found check-in for ${dateKey}:`, {
+          gymName: record.gymName,
+          duration: record.duration,
+        });
+      }
+      return match;
+    });
+    
+    console.log(`📅 Checking day ${day}: dateKey=${dateKey}, hasCheckIn=${hasCheckIn}`);
+    return hasCheckIn;
   };
 
   const previousMonth = () => {
@@ -296,6 +346,7 @@ const ActivityLog: React.FC = () => {
     );
     const today = new Date();
 
+    // Allow navigation to current month and past months only
     if (
       next.getMonth() <= today.getMonth() &&
       next.getFullYear() <= today.getFullYear()
@@ -330,6 +381,9 @@ const ActivityLog: React.FC = () => {
     const daysInMonth = getDaysInMonth(currentMonth);
     const firstDay = getFirstDayOfMonth(currentMonth);
     const days = [];
+
+    console.log(`🗓️ Rendering calendar for ${currentMonth.getMonth() + 1}/${currentMonth.getFullYear()}`);
+    console.log(`   Days in month: ${daysInMonth}, First day: ${firstDay}`);
 
     for (let i = 0; i < firstDay; i++) {
       days.push(<View key={`empty-${i}`} style={styles.dayCell} />);
@@ -505,7 +559,10 @@ const ActivityLog: React.FC = () => {
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Activity Log</Text>
         <TouchableOpacity
-          onPress={loadCheckInHistory}
+          onPress={() => {
+            console.log("🔄 Manual refresh triggered");
+            loadCheckInHistory();
+          }}
           style={styles.refreshButton}
         >
           <Ionicons name="refresh-outline" size={24} color="#4ade80" />
@@ -520,6 +577,16 @@ const ActivityLog: React.FC = () => {
           <View style={styles.errorBanner}>
             <Ionicons name="warning-outline" size={20} color="#f87171" />
             <Text style={styles.errorText}>{error}</Text>
+            <TouchableOpacity
+              onPress={() => {
+                setError(null);
+                loadCheckInHistory();
+              }}
+              style={styles.retryButton}
+            >
+              <Ionicons name="refresh" size={16} color="#f87171" />
+              <Text style={styles.retryButtonText}>Retry</Text>
+            </TouchableOpacity>
             <TouchableOpacity
               onPress={() => setError(null)}
               style={styles.closeErrorButton}
@@ -617,6 +684,15 @@ const ActivityLog: React.FC = () => {
               <Text style={styles.emptyStateSubtext}>
                 Start your fitness journey by checking in at the gym!
               </Text>
+              <TouchableOpacity
+                style={styles.checkInPromptButton}
+                onPress={() => router.push("/(member)/mygym")}
+              >
+                <Ionicons name="fitness" size={18} color="#0a0f1a" />
+                <Text style={styles.checkInPromptButtonText}>
+                  Go to My Gym
+                </Text>
+              </TouchableOpacity>
             </View>
           ) : (
             dailySessions
@@ -670,9 +746,7 @@ const ActivityLog: React.FC = () => {
                             {formatDuration(dailySession.totalDuration)}
                           </Text>
                           <Text style={styles.sessionGym}>
-                            {gymNames.length === 1
-                              ? gymNames[0]
-                              : `${gymNames[0]} + ${gymNames.length - 1} more`}
+                            {gymNames[0] || "My Gym"}
                           </Text>
                         </View>
                       </View>
@@ -966,6 +1040,21 @@ const styles = StyleSheet.create({
     marginTop: 6,
     textAlign: "center",
   },
+  checkInPromptButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    backgroundColor: "#4ade80",
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    borderRadius: 12,
+    marginTop: 16,
+  },
+  checkInPromptButtonText: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: "#0a0f1a",
+  },
   sessionCard: {
     flexDirection: "row",
     alignItems: "center",
@@ -1088,6 +1177,21 @@ const styles = StyleSheet.create({
     color: "#f87171",
     marginLeft: 8,
     marginRight: 8,
+  },
+  retryButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 6,
+    backgroundColor: "rgba(248, 113, 113, 0.1)",
+    marginRight: 8,
+  },
+  retryButtonText: {
+    fontSize: 12,
+    color: "#f87171",
+    fontWeight: "600",
   },
   closeErrorButton: {
     width: 24,
